@@ -4,7 +4,12 @@
   "description": "octo agent in your editor — connects to a local octo serve",
   "version": "0.0.1",
   "publisher": "open-octo",
-  "private": true,
+  "license": "MIT",
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-octo/octo-vscode.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

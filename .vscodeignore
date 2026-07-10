@@ -21,3 +21,4 @@ esbuild.config.mjs
 vitest.config.ts
 tsconfig.json
 package-lock.json
+resources/marketplace-icon.svg
