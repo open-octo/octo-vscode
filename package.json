@@ -1,0 +1,76 @@
+{
+  "name": "octo",
+  "displayName": "octo",
+  "description": "octo agent in your editor — connects to a local octo serve",
+  "version": "0.0.1",
+  "publisher": "open-octo",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "octo",
+      "properties": {
+        "octo.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Host octo serve binds to."
+        },
+        "octo.port": {
+          "type": "number",
+          "default": 8088,
+          "description": "Port octo serve listens on."
+        },
+        "octo.accessKey": {
+          "type": "string",
+          "default": "",
+          "description": "Access key for a non-loopback octo serve. Not needed for the default local connection."
+        },
+        "octo.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Spawn 'octo serve -d' automatically when no server is found at octo.host:octo.port."
+        },
+        "octo.binaryPath": {
+          "type": "string",
+          "default": "octo",
+          "description": "Path to the octo binary, or a bare name to resolve from PATH and common install locations."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "octo.showStatus",
+        "title": "octo: Show Connection Status"
+      },
+      {
+        "command": "octo.reconnect",
+        "title": "octo: Reconnect"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "vscode:prepublish": "node esbuild.config.mjs --production"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}
