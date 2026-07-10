@@ -33,24 +33,48 @@ export type UIPayload =
   | { type: 'file_read'; path: string; lines_read: number; truncated: boolean; content_preview: string; total_lines?: number }
   | { type: 'terminal'; command: string; status: string; output_preview: string };
 
-// Mirrors the wsOutEvent union in internal/server/ws_types.go, PLUS the
-// tool_id field that ws_handlers.go's handleEvent adds to the ad-hoc
-// map[string]any it actually broadcasts for tool_call/tool_result/tool_error/
-// tool_stdout — ws_types.go's named structs for those don't declare it, but
-// the live wire payload (and the REST history replay in handlers.go) both
-// include it, and it's the only reliable way to pair a result back to its
-// call: these events carry no ordering guarantee beyond "eventually", so an
-// order-based pairing breaks the moment two tool calls interleave.
+// Mirrors what ws_handlers.go's handleEvent actually constructs and
+// broadcasts during a live turn — NOT ws_types.go's named structs, several
+// of which (wsEventOutput, wsEventDiff, wsEventFilePreview,
+// wsEventShellPreview) are declared but never constructed anywhere in the
+// server. Verified by grepping every `"type": "..."` literal actually
+// broadcast, not by trusting the struct declarations.
+//
+// Text streams as text_delta (per-token), NOT "output" — "output" is dead
+// code. At turn end, an assistant_message event carries the complete,
+// aggregated content; it supersedes (replaces, not appends to) whatever
+// text_delta had streamed, matching web/src/views/ChatView.svelte's own
+// handling ("Frontend expects a complete assistant_message event rather
+// than streaming text_delta fragments" — ws_handlers.go's comment on why
+// the server sends it). thinking_delta is the same relationship for the
+// reasoning trace, finalized into assistant_message.thinking.
+//
+// tool_call/tool_result/tool_error/tool_stdout all carry tool_id — added by
+// handleEvent to the ad-hoc map[string]any it actually broadcasts;
+// ws_types.go's named structs for these don't declare it, but it's the
+// only reliable way to pair a result back to its call (no ordering
+// guarantee otherwise). tool_call has no "summary" field — that was
+// invented from the unused wsEventToolCall struct, never actually sent.
 export type OctoEvent =
   | { type: 'session_list'; sessions: OctoSession[] }
-  | { type: 'output'; content: string }
-  | { type: 'tool_call'; name: string; args: unknown; summary?: string; tool_id?: string }
+  | { type: 'text_delta'; text: string }
+  | { type: 'thinking_delta'; text: string }
+  | { type: 'assistant_message'; content: string; thinking?: string }
+  | { type: 'history_user_message'; content: string; created_at?: number; images?: string[] }
+  | { type: 'tool_call'; name: string; args: unknown; tool_id?: string }
   | { type: 'tool_result'; result: string; ui_payload?: UIPayload; tool_id?: string }
   | { type: 'tool_error'; error: string; tool_id?: string }
   | { type: 'tool_stdout'; lines: string[]; tool_id?: string }
+  // message is present only in the REST history-replay snapshot, never on
+  // the live turn-start/re-seed broadcasts — those carry progress_type
+  // ("thinking") instead, with no message text at all.
   | { type: 'progress'; message?: string; progress_type?: string; phase: string }
   | { type: 'complete'; iterations: number; awaiting_user_feedback?: boolean }
-  | { type: 'session_update'; status?: string; context_usage?: number; working_dir?: string }
+  // Redundant with assistant_message (both carry the final reply); never
+  // acted on, kept here only so the type is documented rather than a
+  // silent unknown.
+  | { type: 'turn_done'; reply: { content: string } }
+  | { type: 'session_update'; status?: string; context_usage?: number; context_tokens?: number; working_dir?: string; permission_mode?: string; reasoning_effort?: string }
   | { type: 'request_confirmation'; id: string; message: string; kind: string; tool_name?: string; command?: string; diff?: string; input?: string }
   // Another client (e.g. the Web UI, on the same session) already answered
   // this confirmation — close it here too instead of leaving a stale modal

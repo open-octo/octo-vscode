@@ -12,16 +12,26 @@ export type UIPayload =
   | { type: 'file_read'; path: string; lines_read: number; truncated: boolean; content_preview: string; total_lines?: number }
   | { type: 'terminal'; command: string; status: string; output_preview: string };
 
+// Mirrors what ws_handlers.go's handleEvent actually broadcasts during a
+// live turn — see octoClient.ts's OctoEvent doc comment for the full
+// derivation (output/diff/file_preview/shell_preview are dead code;
+// text/thinking stream as text_delta/thinking_delta then get finalized —
+// replaced, not appended to — by assistant_message at turn end; tool_call
+// has no "summary" field).
 export type OctoEvent =
   | { type: 'session_list'; sessions: unknown[] }
-  | { type: 'output'; content: string }
-  | { type: 'tool_call'; name: string; args: unknown; summary?: string; tool_id?: string }
+  | { type: 'text_delta'; text: string }
+  | { type: 'thinking_delta'; text: string }
+  | { type: 'assistant_message'; content: string; thinking?: string }
+  | { type: 'history_user_message'; content: string; created_at?: number; images?: string[] }
+  | { type: 'tool_call'; name: string; args: unknown; tool_id?: string }
   | { type: 'tool_result'; result: string; ui_payload?: UIPayload; tool_id?: string }
   | { type: 'tool_error'; error: string; tool_id?: string }
   | { type: 'tool_stdout'; lines: string[]; tool_id?: string }
   | { type: 'progress'; message?: string; progress_type?: string; phase: string }
   | { type: 'complete'; iterations: number; awaiting_user_feedback?: boolean }
-  | { type: 'session_update'; status?: string; context_usage?: number; working_dir?: string }
+  | { type: 'turn_done'; reply: { content: string } }
+  | { type: 'session_update'; status?: string; context_usage?: number; context_tokens?: number; working_dir?: string; permission_mode?: string; reasoning_effort?: string }
   | {
       type: 'request_confirmation';
       id: string;

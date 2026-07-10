@@ -6,7 +6,6 @@ export type ToolBlock = {
   toolId?: string;
   name: string;
   args: unknown;
-  summary?: string;
   result?: string;
   error?: string;
   stdout: string[];
@@ -16,6 +15,12 @@ export type ToolBlock = {
 export type TextBlock = {
   kind: 'user' | 'assistant';
   text: string;
+  // 'assistant' only: still being appended to by text_delta, not yet
+  // finalized by assistant_message. Never set on 'user' blocks.
+  streaming?: boolean;
+  // 'assistant' only: the reasoning trace finalized alongside this reply
+  // (assistant_message.thinking), if show_reasoning was on.
+  thinking?: string;
   // Selection/file context attached to this turn — set on 'user' blocks
   // once the host reports back what it actually attached (see
   // ChatViewProvider.send). Never set for 'assistant'.
@@ -32,6 +37,11 @@ class ChatState {
   blocks: Block[] = $state([]);
   busy: boolean = $state(false);
   status: string | null = $state(null);
+  // Live thinking_delta buffer for the round currently streaming — handed
+  // off to the next assistant block's `.thinking` the moment text_delta
+  // starts (reasoning always precedes its reply within a round), and
+  // cleared once assistant_message finalizes it.
+  thinking: string | null = $state(null);
   sendError: string | null = $state(null);
   pendingConfirmation: PendingConfirmation | null = $state(null);
   pendingQuestion: PendingQuestion | null = $state(null);
@@ -71,6 +81,9 @@ class ChatState {
   sendMessage(text: string): void {
     const trimmed = text.trim();
     if (!trimmed || this.busy) return;
+    // Rendered optimistically rather than on the server's history_user_message
+    // echo: this UI never lets a second send through while busy, so there's
+    // no steer/interleaving case that needs the echo to disambiguate ordering.
     this.blocks.push({ kind: 'user', text: trimmed });
     this.busy = true;
     this.sendError = null;
@@ -117,14 +130,31 @@ class ChatState {
 
   private handleEvent(event: OctoEvent): void {
     switch (event.type) {
-      case 'output': {
+      case 'text_delta': {
         const last = this.blocks[this.blocks.length - 1];
-        if (last?.kind === 'assistant') {
-          last.text += event.content;
+        if (last?.kind === 'assistant' && last.streaming) {
+          last.text += event.text;
         } else {
-          this.blocks.push({ kind: 'assistant', text: event.content });
+          this.blocks.push({ kind: 'assistant', text: event.text, streaming: true, thinking: this.thinking ?? undefined });
+          this.thinking = null;
         }
         this.status = null;
+        break;
+      }
+      case 'thinking_delta':
+        this.thinking = (this.thinking ?? '') + event.text;
+        this.status = null;
+        break;
+      case 'assistant_message': {
+        const last = this.blocks[this.blocks.length - 1];
+        if (last?.kind === 'assistant' && last.streaming) {
+          last.text = event.content;
+          last.thinking = event.thinking || last.thinking;
+          last.streaming = false;
+        } else {
+          this.blocks.push({ kind: 'assistant', text: event.content, thinking: event.thinking, streaming: false });
+        }
+        this.thinking = null;
         break;
       }
       case 'tool_call': {
@@ -133,7 +163,6 @@ class ChatState {
           toolId: event.tool_id,
           name: event.name,
           args: event.args,
-          summary: event.summary,
           stdout: [],
         };
         this.blocks.push(tool);
@@ -160,7 +189,10 @@ class ChatState {
         break;
       }
       case 'progress':
-        this.status = event.message ?? null;
+        // message is only ever populated on the REST history-replay
+        // snapshot, never on the live turn-start/re-seed broadcasts this
+        // event actually carries — those only set progress_type.
+        this.status = event.progress_type === 'thinking' ? 'Thinking…' : event.message ?? null;
         break;
       case 'complete':
         this.busy = false;
@@ -182,6 +214,10 @@ class ChatState {
           this.pendingQuestion = null;
         }
         break;
+      // history_user_message/turn_done: intentionally unhandled. The user's
+      // own message is already rendered optimistically by sendMessage(), and
+      // turn_done duplicates assistant_message — see both events' doc
+      // comments in protocol.ts.
       default:
         break;
     }

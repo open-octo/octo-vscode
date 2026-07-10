@@ -41,7 +41,6 @@
       <div class="tool">
         <div class="tool-header">
           <span class="tool-name">{block.name}</span>
-          {#if block.summary}<span class="tool-summary">{block.summary}</span>{/if}
           {#if edit}
             <button class="tool-action" onclick={() => onViewDiff(edit.diff, edit.path)}>View diff</button>
           {:else if openable}
@@ -63,6 +62,9 @@
           <div class="attachments">
             {#each block.attachments as label}<span class="attachment-chip">{label}</span>{/each}
           </div>
+        {/if}
+        {#if block.thinking}
+          <div class="thinking">{block.thinking}</div>
         {/if}
         {block.text}
       </div>
@@ -96,6 +98,14 @@
   .bubble.assistant {
     background: transparent;
   }
+  .thinking {
+    margin-bottom: 6px;
+    padding-left: 8px;
+    border-left: 2px solid var(--vscode-widget-border);
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    font-style: italic;
+  }
   .attachments {
     display: flex;
     flex-wrap: wrap;
@@ -126,13 +136,6 @@
   .tool-name {
     font-weight: 600;
     font-family: var(--vscode-editor-font-family);
-  }
-  .tool-summary {
-    color: var(--vscode-descriptionForeground);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1;
   }
   .tool-action {
     margin-left: auto;

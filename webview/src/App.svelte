@@ -26,7 +26,9 @@
     onViewDiff={(diff, path) => chatState.viewDiff(diff, path)}
   />
 
-  {#if chatState.status}
+  {#if chatState.thinking}
+    <div class="status-line thinking">{chatState.thinking}</div>
+  {:else if chatState.status}
     <div class="status-line">{chatState.status}</div>
   {/if}
   {#if chatState.sendError}
@@ -87,5 +89,8 @@
   }
   .status-line.error {
     color: var(--vscode-errorForeground);
+  }
+  .status-line.thinking {
+    font-style: italic;
   }
 </style>
