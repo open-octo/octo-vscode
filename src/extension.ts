@@ -35,7 +35,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(controller.onStateChange(() => renderStatusBar(statusBarItem, controller)));
   renderStatusBar(statusBarItem, controller);
 
-  const session = new ChatSessionManager(controller);
+  const session = new ChatSessionManager(controller, context.workspaceState);
   context.subscriptions.push(session);
 
   const chatViewProvider = new ChatViewProvider(context.extensionUri, controller, session);
@@ -56,7 +56,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
-  void controller.connect();
+  void controller.connect().then(() => session.restoreLastSession());
 }
 
 export function deactivate(): void {

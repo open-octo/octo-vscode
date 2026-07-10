@@ -8,14 +8,17 @@ export interface HistoryLoaded {
   events: OctoEvent[];
 }
 
+const LAST_SESSION_KEY = 'octo.lastSessionId';
+
 function normalizePath(path: string): string {
   return path.replace(/[/\\]+$/, '');
 }
 
 /**
  * Owns the chat session backing the sidebar webview: creates one lazily on
- * first use (bound to the workspace root), or switches to an existing one
- * via the session picker (ChatViewProvider). Filters the connection-wide
+ * first use (bound to the workspace root), switches to an existing one via
+ * the session picker (ChatViewProvider), or restores whichever session was
+ * active last time this workspace was open. Filters the connection-wide
  * event stream down to whichever session is currently active before
  * handing events to the webview.
  */
@@ -28,16 +31,49 @@ export class ChatSessionManager {
   readonly onEvent = this.eventEmitter.event;
   readonly onHistoryLoaded = this.historyEmitter.event;
 
-  constructor(private readonly controller: ConnectionController) {
+  // workspaceState, not the webview's local storage: the transcript is
+  // rebuilt from the server's own history on restore (via switchToSession),
+  // which stays correct even if other clients touched the session while
+  // this one wasn't running — a cached copy of the rendered transcript
+  // could not make that guarantee.
+  constructor(
+    private readonly controller: ConnectionController,
+    private readonly workspaceState: vscode.Memento,
+  ) {
     controller.onEvent(({ sessionId, event }) => {
       if (this.sessionId && sessionId === this.sessionId) {
         this.eventEmitter.fire(event);
+      }
+    });
+    // Covers both an automatic reconnect after a drop (activeSubscriptions
+    // in octoClient.ts already replays for that case, so this is a no-op)
+    // and an explicit octo.reconnect (a brand-new OctoClient with no memory
+    // of prior subscriptions, which otherwise leaves the active session
+    // getting no live updates until something else calls subscribe()).
+    controller.onStateChange((state) => {
+      if (state === 'connected' && this.sessionId) {
+        this.controller.subscribe(this.sessionId);
       }
     });
   }
 
   getSessionId(): string | null {
     return this.sessionId;
+  }
+
+  /** Rehydrates whichever session was active last time this workspace was
+   * open, if the connection is up and that session still exists. Silently
+   * does nothing otherwise (a fresh install, a deleted session, or a
+   * failed connection all just leave the lazy create-on-first-message path
+   * in place, same as before this existed). */
+  async restoreLastSession(): Promise<void> {
+    const lastId = this.workspaceState.get<string>(LAST_SESSION_KEY);
+    if (!lastId) return;
+    try {
+      await this.switchToSession(lastId);
+    } catch {
+      void this.workspaceState.update(LAST_SESSION_KEY, undefined);
+    }
   }
 
   async sendMessage(text: string, files?: OctoUserFile[]): Promise<void> {
@@ -85,6 +121,7 @@ export class ChatSessionManager {
     const events = await this.controller.getSessionMessages(sessionId);
     this.sessionId = sessionId;
     this.sessionPromise = Promise.resolve(sessionId);
+    void this.workspaceState.update(LAST_SESSION_KEY, sessionId);
     this.historyEmitter.fire({ sessionId, events });
     this.controller.subscribe(sessionId);
   }
@@ -122,6 +159,7 @@ export class ChatSessionManager {
     const session = await this.controller.createSession({ name: 'VS Code', workingDir: workspaceFolder?.uri.fsPath });
     this.sessionId = session.id;
     this.sessionPromise = Promise.resolve(session.id);
+    void this.workspaceState.update(LAST_SESSION_KEY, session.id);
     this.controller.subscribe(session.id);
     return session.id;
   }

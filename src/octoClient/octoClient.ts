@@ -127,6 +127,13 @@ export class OctoClient {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private closedByUser = false;
   private readonly baseUrl: string;
+  // Sessions subscribe() has been asked to track — re-sent on every socket
+  // open, not just the first. send() silently no-ops on a socket that isn't
+  // OPEN yet (or has dropped), so without this a subscribe() call made
+  // before the handshake finishes, or a reconnect after any drop, would
+  // otherwise leave the session stuck with no live updates until something
+  // else happens to call subscribe() again.
+  private readonly activeSubscriptions = new Set<string>();
 
   constructor(private readonly options: OctoClientOptions) {
     this.baseUrl = `http://${options.host}:${options.port}`;
@@ -153,10 +160,12 @@ export class OctoClient {
   }
 
   subscribe(sessionId: string): void {
+    this.activeSubscriptions.add(sessionId);
     this.send({ type: 'subscribe', session_id: sessionId });
   }
 
   unsubscribe(sessionId: string): void {
+    this.activeSubscriptions.delete(sessionId);
     this.send({ type: 'unsubscribe', session_id: sessionId });
   }
 
@@ -225,7 +234,12 @@ export class OctoClient {
     const socket = new WebSocket(url);
     this.ws = socket;
 
-    socket.on('open', () => this.handlers.onOpen?.());
+    socket.on('open', () => {
+      for (const sessionId of this.activeSubscriptions) {
+        this.send({ type: 'subscribe', session_id: sessionId });
+      }
+      this.handlers.onOpen?.();
+    });
 
     socket.on('close', () => {
       this.ws = null;
