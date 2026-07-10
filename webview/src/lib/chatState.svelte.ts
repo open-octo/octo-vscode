@@ -23,7 +23,7 @@ export type TextBlock = {
   thinking?: string;
   // Selection/file context attached to this turn — set on 'user' blocks
   // once the host reports back what it actually attached (see
-  // ChatViewProvider.send). Never set for 'assistant'.
+  // ChatPanel.send). Never set for 'assistant'.
   attachments?: string[];
 };
 
@@ -138,10 +138,6 @@ export class ChatState {
 
   viewDiff(diff: string, path?: string): void {
     postToHost({ command: 'viewDiff', diff, path });
-  }
-
-  switchSessions(): void {
-    postToHost({ command: 'listSessions' });
   }
 
   answerConfirmation(id: string, result: string): void {

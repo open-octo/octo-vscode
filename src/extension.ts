@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 
+import { ChatPanel } from './chat/ChatPanel';
 import { ChatSessionManager } from './chat/ChatSessionManager';
-import { ChatViewProvider } from './chat/ChatViewProvider';
+import { SessionListProvider } from './chat/SessionListProvider';
 import { ConnectionController } from './connection/ConnectionController';
 import { registerDiffContentProvider } from './context/diffView';
 
@@ -38,10 +39,14 @@ export function activate(context: vscode.ExtensionContext): void {
   const session = new ChatSessionManager(controller, context.workspaceState);
   context.subscriptions.push(session);
 
-  const chatViewProvider = new ChatViewProvider(context.extensionUri, controller, session);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewId, chatViewProvider),
-  );
+  const sessionList = new SessionListProvider(session);
+  context.subscriptions.push(vscode.window.registerTreeDataProvider('octo.sessionsView', sessionList));
+  // The list's "current" marker and its contents both depend on state this
+  // extension only learns asynchronously (session creation, history-driven
+  // switches, the startup restore below) — refresh on every event/history
+  // tick rather than trying to guess which ones actually change the list.
+  context.subscriptions.push(session.onEvent(() => sessionList.refresh()));
+  context.subscriptions.push(session.onHistoryLoaded(() => sessionList.refresh()));
 
   context.subscriptions.push(
     vscode.commands.registerCommand('octo.showStatus', () => {
@@ -51,12 +56,18 @@ export function activate(context: vscode.ExtensionContext): void {
       controller.disconnect();
       void controller.connect();
     }),
-    vscode.commands.registerCommand('octo.switchSession', () => {
-      void chatViewProvider.showSessionPicker();
+    vscode.commands.registerCommand('octo.newSession', () => {
+      void ChatPanel.openNew(context.extensionUri, controller, session);
+    }),
+    vscode.commands.registerCommand('octo.openSession', (sessionId: string) => {
+      void ChatPanel.openSession(context.extensionUri, controller, session, sessionId);
     }),
   );
 
-  void controller.connect().then(() => session.restoreLastSession());
+  void controller
+    .connect()
+    .then(() => session.restoreLastSession())
+    .then(() => sessionList.refresh());
 }
 
 export function deactivate(): void {

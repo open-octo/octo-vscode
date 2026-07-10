@@ -15,12 +15,12 @@ function normalizePath(path: string): string {
 }
 
 /**
- * Owns the chat session backing the sidebar webview: creates one lazily on
- * first use (bound to the workspace root), switches to an existing one via
- * the session picker (ChatViewProvider), or restores whichever session was
- * active last time this workspace was open. Filters the connection-wide
- * event stream down to whichever session is currently active before
- * handing events to the webview.
+ * Owns the chat session backing the detail panel (ChatPanel): creates one
+ * lazily on first use (bound to the workspace root), switches to an
+ * existing one via the sidebar's session list, or restores whichever
+ * session was active last time this workspace was open. Filters the
+ * connection-wide event stream down to whichever session is currently
+ * active before handing events to the webview.
  */
 export class ChatSessionManager {
   private sessionId: string | null = null;

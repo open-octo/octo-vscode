@@ -1,7 +1,7 @@
 // Mirrors src/octoClient/octoClient.ts's OctoEvent union and the extension
-// host <-> webview postMessage contract (ChatViewProvider.ts). Duplicated
-// rather than imported: that file pulls in `ws`, a Node-only module that
-// can't land in this browser bundle. Keep the two in sync by hand.
+// host <-> webview postMessage contract (ChatPanel.ts). Duplicated rather
+// than imported: that file pulls in `ws`, a Node-only module that can't
+// land in this browser bundle. Keep the two in sync by hand.
 
 // ui_payload shapes — see octoClient.ts's UIPayload doc comment for why
 // these come from the tools' `ui := map[string]any{...}` literals rather
@@ -91,7 +91,4 @@ export type OutboundHostMessage =
   | { command: 'pickFile' }
   | { command: 'removeAttachment'; label: string }
   | { command: 'openFile'; path: string }
-  | { command: 'viewDiff'; diff: string; path?: string }
-  // Opens the native session-picker quick pick (see ChatViewProvider) —
-  // the webview has no session-list UI of its own.
-  | { command: 'listSessions' };
+  | { command: 'viewDiff'; diff: string; path?: string };

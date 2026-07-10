@@ -56,8 +56,9 @@
         "title": "octo: Reconnect"
       },
       {
-        "command": "octo.switchSession",
-        "title": "octo: Switch Session"
+        "command": "octo.newSession",
+        "title": "octo: New Session",
+        "icon": "$(add)"
       }
     ],
     "viewsContainers": {
@@ -72,9 +73,23 @@
     "views": {
       "octo": [
         {
-          "type": "webview",
-          "id": "octo.chatView",
-          "name": "Chat"
+          "id": "octo.sessionsView",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "octo.sessionsView",
+        "contents": "No octo sessions for this workspace yet.\n[New Session](command:octo.newSession)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "octo.newSession",
+          "when": "view == octo.sessionsView",
+          "group": "navigation"
         }
       ]
     }

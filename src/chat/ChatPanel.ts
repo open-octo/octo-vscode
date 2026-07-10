@@ -24,56 +24,94 @@ type InboundMessage =
   | { command: 'pickFile' }
   | { command: 'removeAttachment'; label: string }
   | { command: 'openFile'; path: string }
-  | { command: 'viewDiff'; diff: string; path?: string }
-  | { command: 'listSessions' };
+  | { command: 'viewDiff'; diff: string; path?: string };
 
-interface SessionPickItem extends vscode.QuickPickItem {
-  // Undefined means "start a new session" — the sentinel first entry.
-  sessionId?: string;
-}
+/**
+ * The chat detail surface: a WebviewPanel opened beside the active editor
+ * group (ViewColumn.Beside), not the Activity Bar sidebar — the sidebar
+ * holds only the session list (SessionListProvider), which has no room and
+ * no need for a composer. One panel instance is reused across
+ * openNew()/openSession() calls rather than stacking a tab per session.
+ */
+export class ChatPanel {
+  private static current: ChatPanel | undefined;
 
-export class ChatViewProvider implements vscode.WebviewViewProvider {
-  static readonly viewId = 'octo.chatView';
-
+  private readonly panel: vscode.WebviewPanel;
   // Keyed by label (the relative path) so re-picking the same file just
-  // refreshes its content rather than duplicating a chip. Lives on the
-  // provider, not per resolveWebviewView call, so it survives the webview
-  // being hidden and recreated before the user sends.
+  // refreshes its content rather than duplicating a chip.
   private readonly pendingAttachments = new Map<string, CapturedAttachment>();
+  private readonly subscriptions: vscode.Disposable[] = [];
 
-  constructor(
-    private readonly extensionUri: vscode.Uri,
+  static async openNew(
+    extensionUri: vscode.Uri,
+    controller: ConnectionController,
+    session: ChatSessionManager,
+  ): Promise<void> {
+    ChatPanel.ensurePanel(extensionUri, controller, session).reveal();
+    await session.startNewSession();
+  }
+
+  static async openSession(
+    extensionUri: vscode.Uri,
+    controller: ConnectionController,
+    session: ChatSessionManager,
+    sessionId: string,
+  ): Promise<void> {
+    ChatPanel.ensurePanel(extensionUri, controller, session).reveal();
+    if (sessionId !== session.getSessionId()) {
+      await session.switchToSession(sessionId);
+    }
+  }
+
+  private static ensurePanel(
+    extensionUri: vscode.Uri,
+    controller: ConnectionController,
+    session: ChatSessionManager,
+  ): ChatPanel {
+    ChatPanel.current ??= new ChatPanel(extensionUri, controller, session);
+    return ChatPanel.current;
+  }
+
+  private constructor(
+    extensionUri: vscode.Uri,
     private readonly controller: ConnectionController,
     private readonly session: ChatSessionManager,
-  ) {}
-
-  resolveWebviewView(webviewView: vscode.WebviewView): void {
-    const webviewRoot = vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview');
-    webviewView.webview.options = {
+  ) {
+    const webviewRoot = vscode.Uri.joinPath(extensionUri, 'dist', 'webview');
+    this.panel = vscode.window.createWebviewPanel('octo.chat', 'octo', vscode.ViewColumn.Beside, {
       enableScripts: true,
+      // A background chat panel losing its JS state (and reloading, with a
+      // visible flash) every time the user clicks back to an editor tab
+      // would be a much worse experience than the memory cost of keeping it
+      // alive — WebviewView doesn't need this (VS Code already retains
+      // sidebar view content on simple visibility toggles), but
+      // WebviewPanel defaults the other way.
+      retainContextWhenHidden: true,
       localResourceRoots: [webviewRoot],
-    };
-    webviewView.webview.html = this.buildHtml(webviewView.webview, webviewRoot);
+    });
+    this.panel.webview.html = this.buildHtml(this.panel.webview, webviewRoot);
 
-    const post = (message: unknown) => void webviewView.webview.postMessage(message);
-
-    const subscriptions: vscode.Disposable[] = [
-      this.controller.onStateChange((state) => post({ command: 'connectionState', state })),
-      this.session.onEvent((event) => {
+    const post = (message: unknown) => void this.panel.webview.postMessage(message);
+    this.subscriptions.push(
+      controller.onStateChange((state) => post({ command: 'connectionState', state })),
+      session.onEvent((event) => {
         post({ command: 'event', event });
         this.autoOpenDiff(event);
       }),
-      this.session.onHistoryLoaded(({ sessionId, events }) => post({ command: 'history', sessionId, events })),
-      webviewView.webview.onDidReceiveMessage((message: InboundMessage) => this.handleMessage(message, post)),
-    ];
-    webviewView.onDidDispose(() => {
-      for (const sub of subscriptions) sub.dispose();
+      session.onHistoryLoaded(({ sessionId, events }) => post({ command: 'history', sessionId, events })),
+      this.panel.webview.onDidReceiveMessage((message: InboundMessage) => this.handleMessage(message, post)),
+    );
+    this.panel.onDidDispose(() => {
+      for (const sub of this.subscriptions) sub.dispose();
+      ChatPanel.current = undefined;
     });
 
-    // The view may be recreated (hidden then shown again) without the
-    // extension host restarting — resend the state a fresh webview missed.
-    post({ command: 'connectionState', state: this.controller.getState() });
-    post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
+    post({ command: 'connectionState', state: controller.getState() });
+    post({ command: 'attachments', labels: [] });
+  }
+
+  private reveal(): void {
+    this.panel.reveal(vscode.ViewColumn.Beside);
   }
 
   private handleMessage(message: InboundMessage, post: (message: unknown) => void): void {
@@ -109,9 +147,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'viewDiff':
         void openDiffFromWebview(message.diff, message.path);
         break;
-      case 'listSessions':
-        void this.showSessionPicker();
-        break;
     }
   }
 
@@ -131,47 +166,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Renders a diff natively the moment it's actionable, without waiting for
    * a click: a pending edit_file permission ask (so the user can actually
    * see what they're approving, not just the modal's plain-text preview),
-   * and a just-applied edit_file result (the acceptance bar this milestone
-   * is built against — "agent 改文件时在编辑器里看到原生 diff"). Both use
-   * preview:true/preserveFocus:true so successive edits reuse one tab
-   * rather than piling up new ones and never steal focus from the sidebar.
+   * and a just-applied edit_file result. Both use preview:true/
+   * preserveFocus:true so successive edits reuse one tab rather than
+   * piling up new ones and never steal focus from the chat panel.
    */
   private autoOpenDiff(event: OctoEvent): void {
     if (event.type === 'request_confirmation' && event.diff) {
       void openEditDiffPreview(event.diff, event.tool_name ?? 'pending edit');
     } else if (event.type === 'tool_result' && event.ui_payload?.type === 'edit') {
       void openEditDiffResult(event.ui_payload.diff, event.ui_payload.path);
-    }
-  }
-
-  /**
-   * Native quick pick over sessions bound to the current workspace, plus a
-   * "+ New session" entry — reachable from the webview's Sessions button
-   * and the octo.switchSession command. Not a custom list UI: the sidebar
-   * is too narrow to usefully compete with the chat transcript for space,
-   * and quick pick already does fuzzy search over the list.
-   */
-  async showSessionPicker(): Promise<void> {
-    try {
-      const sessions = await this.session.listWorkspaceSessions();
-      const items: SessionPickItem[] = [
-        { label: '$(add) New session', alwaysShow: true },
-        ...sessions.map((s) => ({
-          label: s.name || 'Untitled',
-          description: s.status,
-          detail: s.id === this.session.getSessionId() ? 'current' : undefined,
-          sessionId: s.id,
-        })),
-      ];
-      const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Switch octo session' });
-      if (!picked) return;
-      if (picked.sessionId) {
-        await this.session.switchToSession(picked.sessionId);
-      } else {
-        await this.session.startNewSession();
-      }
-    } catch (err) {
-      void vscode.window.showErrorMessage(`octo: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
