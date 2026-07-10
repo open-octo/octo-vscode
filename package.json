@@ -2,7 +2,7 @@
   "name": "octo-agent",
   "displayName": "Octo Agent",
   "description": "octo agent in your editor — connects to a local octo serve",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "open-octo",
   "license": "MIT",
   "icon": "resources/icon.png",

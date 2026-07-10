@@ -120,3 +120,42 @@ describe('ChatSessionManager.switchToSession', () => {
     expect(manager.getSessionId()).toBeNull();
   });
 });
+
+describe('ChatSessionManager.listWorkspaceSessions', () => {
+  it('waits for the connection to be ready before listing sessions', async () => {
+    // Regression test: the sidebar's TreeDataProvider calls this the moment
+    // the view becomes visible — right at activation, before connect()'s
+    // daemon spawn/health-check has a chance to finish — and it used to hit
+    // the same synchronous "octo: not connected" throw as
+    // startNewSession()/switchToSession() did.
+    const { controller, calls } = fakeController();
+    let releaseReady = () => {};
+    controller.ready = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseReady = resolve;
+        }),
+    );
+    controller.listSessions = vi.fn(async () => {
+      calls.push('listSessions');
+      return [];
+    });
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    const pending = manager.listWorkspaceSessions();
+    expect(calls).toEqual([]);
+
+    releaseReady();
+    await pending;
+
+    expect(calls).toEqual(['listSessions']);
+  });
+
+  it('returns an empty list rather than throwing when the connection attempt fails', async () => {
+    const { controller } = fakeController();
+    controller.ready = vi.fn().mockRejectedValue(new Error('octo: failed to reach octo serve'));
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await expect(manager.listWorkspaceSessions()).resolves.toEqual([]);
+  });
+});

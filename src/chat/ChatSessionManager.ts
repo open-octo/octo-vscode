@@ -98,6 +98,18 @@ export class ChatSessionManager {
    * separator. Sessions from other workspaces/sources (channel, cron) are
    * deliberately not surfaced here. */
   async listWorkspaceSessions(): Promise<OctoSession[]> {
+    // The sidebar's TreeDataProvider calls this the moment the view becomes
+    // visible — right at activation, well before connect()'s daemon
+    // spawn/health-check (up to 15s) has a chance to finish. Same race as
+    // startNewSession()/switchToSession(); a genuine connection failure is
+    // already reported by connect()'s own showErrorMessage, so surface as
+    // an empty list here rather than an uncaught rejection out of
+    // getChildren().
+    try {
+      await this.controller.ready();
+    } catch {
+      return [];
+    }
     const all = await this.controller.listSessions();
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) return all;
