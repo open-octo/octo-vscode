@@ -20,7 +20,11 @@
     <div class="banner" class:error={chatState.connectionState === 'failed'}>{connectionLabel}</div>
   {/if}
 
-  <MessageList blocks={chatState.blocks} />
+  <MessageList
+    blocks={chatState.blocks}
+    onOpenFile={(path) => chatState.openFile(path)}
+    onViewDiff={(diff, path) => chatState.viewDiff(diff, path)}
+  />
 
   {#if chatState.status}
     <div class="status-line">{chatState.status}</div>

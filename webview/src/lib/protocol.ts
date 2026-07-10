@@ -3,13 +3,22 @@
 // rather than imported: that file pulls in `ws`, a Node-only module that
 // can't land in this browser bundle. Keep the two in sync by hand.
 
+// ui_payload shapes — see octoClient.ts's UIPayload doc comment for why
+// these come from the tools' `ui := map[string]any{...}` literals rather
+// than ws_types.go's named structs.
+export type UIPayload =
+  | { type: 'edit'; path: string; occurrences: number; diff: string }
+  | { type: 'write'; path: string; size_bytes: number; line_count: number; preview: string; preview_truncated: boolean }
+  | { type: 'file_read'; path: string; lines_read: number; truncated: boolean; content_preview: string; total_lines?: number }
+  | { type: 'terminal'; command: string; status: string; output_preview: string };
+
 export type OctoEvent =
   | { type: 'session_list'; sessions: unknown[] }
   | { type: 'output'; content: string }
-  | { type: 'tool_call'; name: string; args: unknown; summary?: string }
-  | { type: 'tool_result'; result: string; ui_payload?: unknown }
-  | { type: 'tool_error'; error: string }
-  | { type: 'tool_stdout'; lines: string[] }
+  | { type: 'tool_call'; name: string; args: unknown; summary?: string; tool_id?: string }
+  | { type: 'tool_result'; result: string; ui_payload?: UIPayload; tool_id?: string }
+  | { type: 'tool_error'; error: string; tool_id?: string }
+  | { type: 'tool_stdout'; lines: string[]; tool_id?: string }
   | { type: 'progress'; message?: string; progress_type?: string; phase: string }
   | { type: 'complete'; iterations: number; awaiting_user_feedback?: boolean }
   | { type: 'session_update'; status?: string; context_usage?: number; working_dir?: string }
@@ -54,4 +63,6 @@ export type OutboundHostMessage =
   | { command: 'confirm'; id: string; result: string }
   | { command: 'answerQuestion'; questionId: string; choices: string[]; custom: string; cancelled: boolean }
   | { command: 'pickFile' }
-  | { command: 'removeAttachment'; label: string };
+  | { command: 'removeAttachment'; label: string }
+  | { command: 'openFile'; path: string }
+  | { command: 'viewDiff'; diff: string; path?: string };

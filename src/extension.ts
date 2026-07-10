@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 import { ChatSessionManager } from './chat/ChatSessionManager';
 import { ChatViewProvider } from './chat/ChatViewProvider';
 import { ConnectionController } from './connection/ConnectionController';
+import { registerDiffContentProvider } from './context/diffView';
 
 function renderStatusBar(item: vscode.StatusBarItem, controller: ConnectionController): void {
   switch (controller.getState()) {
@@ -23,6 +24,8 @@ function renderStatusBar(item: vscode.StatusBarItem, controller: ConnectionContr
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  registerDiffContentProvider(context);
+
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBarItem.command = 'octo.showStatus';
   context.subscriptions.push(statusBarItem);

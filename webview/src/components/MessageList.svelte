@@ -1,7 +1,26 @@
 <script lang="ts">
-  import type { Block } from '../lib/chatState.svelte';
+  import type { Block, ToolBlock } from '../lib/chatState.svelte';
+  import type { UIPayload } from '../lib/protocol';
 
-  let { blocks }: { blocks: Block[] } = $props();
+  let {
+    blocks,
+    onOpenFile,
+    onViewDiff,
+  }: {
+    blocks: Block[];
+    onOpenFile: (path: string) => void;
+    onViewDiff: (diff: string, path?: string) => void;
+  } = $props();
+
+  // Narrowing block.uiPayload?.type === 'edit' inline in the template loses
+  // the narrowing by the time it reaches an onclick closure — pulling it
+  // through a typed function sidesteps that instead of fighting it.
+  function editPayload(block: ToolBlock): Extract<UIPayload, { type: 'edit' }> | undefined {
+    return block.uiPayload?.type === 'edit' ? block.uiPayload : undefined;
+  }
+  function openablePayload(block: ToolBlock): Extract<UIPayload, { type: 'write' | 'file_read' }> | undefined {
+    return block.uiPayload?.type === 'write' || block.uiPayload?.type === 'file_read' ? block.uiPayload : undefined;
+  }
 
   let container: HTMLDivElement | undefined = $state();
 
@@ -17,10 +36,17 @@
 <div class="list" bind:this={container}>
   {#each blocks as block}
     {#if block.kind === 'tool'}
+      {@const edit = editPayload(block)}
+      {@const openable = openablePayload(block)}
       <div class="tool">
         <div class="tool-header">
           <span class="tool-name">{block.name}</span>
           {#if block.summary}<span class="tool-summary">{block.summary}</span>{/if}
+          {#if edit}
+            <button class="tool-action" onclick={() => onViewDiff(edit.diff, edit.path)}>View diff</button>
+          {:else if openable}
+            <button class="tool-action" onclick={() => onOpenFile(openable.path)}>Open</button>
+          {/if}
         </div>
         {#if block.stdout.length}
           <pre class="tool-body">{block.stdout.join('\n')}</pre>
@@ -92,6 +118,7 @@
   }
   .tool-header {
     display: flex;
+    align-items: center;
     gap: 8px;
     padding: 5px 8px;
     background: var(--vscode-editorWidget-background);
@@ -105,6 +132,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 1;
+  }
+  .tool-action {
+    margin-left: auto;
+    flex-shrink: 0;
+    height: 20px;
+    padding: 0 8px;
+    border-radius: 4px;
+    border: 1px solid var(--vscode-widget-border);
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .tool-action:hover {
+    background: var(--vscode-button-secondaryHoverBackground);
   }
   .tool-body {
     margin: 0;

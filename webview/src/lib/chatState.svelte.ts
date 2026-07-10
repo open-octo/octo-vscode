@@ -1,14 +1,16 @@
 import { postToHost } from './vscodeApi';
-import type { ConnectionState, InboundHostMessage, OctoEvent } from './protocol';
+import type { ConnectionState, InboundHostMessage, OctoEvent, UIPayload } from './protocol';
 
 export type ToolBlock = {
   kind: 'tool';
+  toolId?: string;
   name: string;
   args: unknown;
   summary?: string;
   result?: string;
   error?: string;
   stdout: string[];
+  uiPayload?: UIPayload;
 };
 
 export type TextBlock = {
@@ -35,6 +37,13 @@ class ChatState {
   pendingQuestion: PendingQuestion | null = $state(null);
   // Files picked via 'Attach file', queued for the next send.
   pendingAttachments: string[] = $state([]);
+
+  // Correlates tool_result/tool_error/tool_stdout back to their tool_call by
+  // tool_id — the only reliable pairing, since these events carry no
+  // ordering guarantee once two tool calls interleave. Not itself reactive
+  // state; the ToolBlock objects it holds are the same references pushed
+  // into `blocks`, so mutating a field here still updates the render.
+  private readonly toolBlocksById = new Map<string, ToolBlock>();
 
   handleHostMessage(message: InboundHostMessage): void {
     switch (message.command) {
@@ -81,6 +90,14 @@ class ChatState {
     postToHost({ command: 'removeAttachment', label });
   }
 
+  openFile(path: string): void {
+    postToHost({ command: 'openFile', path });
+  }
+
+  viewDiff(diff: string, path?: string): void {
+    postToHost({ command: 'viewDiff', diff, path });
+  }
+
   answerConfirmation(id: string, result: string): void {
     this.pendingConfirmation = null;
     postToHost({ command: 'confirm', id, result });
@@ -110,28 +127,35 @@ class ChatState {
         this.status = null;
         break;
       }
-      case 'tool_call':
-        this.blocks.push({
+      case 'tool_call': {
+        const tool: ToolBlock = {
           kind: 'tool',
+          toolId: event.tool_id,
           name: event.name,
           args: event.args,
           summary: event.summary,
           stdout: [],
-        });
+        };
+        this.blocks.push(tool);
+        if (event.tool_id) this.toolBlocksById.set(event.tool_id, tool);
         this.status = null;
         break;
+      }
       case 'tool_result': {
-        const tool = this.openToolBlock();
-        if (tool) tool.result = event.result;
+        const tool = this.resolveToolBlock(event.tool_id);
+        if (tool) {
+          tool.result = event.result;
+          tool.uiPayload = event.ui_payload;
+        }
         break;
       }
       case 'tool_error': {
-        const tool = this.openToolBlock();
+        const tool = this.resolveToolBlock(event.tool_id);
         if (tool) tool.error = event.error;
         break;
       }
       case 'tool_stdout': {
-        const tool = this.openToolBlock();
+        const tool = this.resolveToolBlock(event.tool_id);
         if (tool) tool.stdout.push(...event.lines);
         break;
       }
@@ -158,10 +182,15 @@ class ChatState {
     }
   }
 
-  // The most recent tool block still missing a result/error — tool_result
-  // pairs with tool_call purely by order, since the wire protocol carries
-  // no shared id between them (see dev-docs/vscode-extension-design.md).
-  private openToolBlock(): ToolBlock | undefined {
+  // Prefers the tool_id map (correct even if tool calls interleave); falls
+  // back to "most recent still-open tool block" only for the hypothetical
+  // case of an event missing tool_id, so a malformed/older event doesn't
+  // just get silently dropped.
+  private resolveToolBlock(toolId: string | undefined): ToolBlock | undefined {
+    if (toolId) {
+      const byId = this.toolBlocksById.get(toolId);
+      if (byId) return byId;
+    }
     for (let i = this.blocks.length - 1; i >= 0; i--) {
       const block = this.blocks[i];
       if (block.kind === 'tool' && block.result === undefined && block.error === undefined) {

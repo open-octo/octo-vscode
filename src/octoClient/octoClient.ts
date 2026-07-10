@@ -22,15 +22,32 @@ export interface OctoUserFile {
   mimeType?: string;
 }
 
-// Mirrors the wsOutEvent union in internal/server/ws_types.go. Fields keep
-// the wire's snake_case so this stays a straight decode, no renaming layer.
+// ui_payload shapes, keyed by tool. Built ad hoc in ws_handlers.go's
+// handleEvent (agent.EventToolDone -> "ui_payload": ev.UI), not declared as
+// named structs in ws_types.go — these mirror internal/tools/edit_file.go,
+// write_file.go, read_file.go, terminal.go's respective `ui := map[string]any{...}`
+// literals, the actual (and only) source of truth for the field names.
+export type UIPayload =
+  | { type: 'edit'; path: string; occurrences: number; diff: string }
+  | { type: 'write'; path: string; size_bytes: number; line_count: number; preview: string; preview_truncated: boolean }
+  | { type: 'file_read'; path: string; lines_read: number; truncated: boolean; content_preview: string; total_lines?: number }
+  | { type: 'terminal'; command: string; status: string; output_preview: string };
+
+// Mirrors the wsOutEvent union in internal/server/ws_types.go, PLUS the
+// tool_id field that ws_handlers.go's handleEvent adds to the ad-hoc
+// map[string]any it actually broadcasts for tool_call/tool_result/tool_error/
+// tool_stdout — ws_types.go's named structs for those don't declare it, but
+// the live wire payload (and the REST history replay in handlers.go) both
+// include it, and it's the only reliable way to pair a result back to its
+// call: these events carry no ordering guarantee beyond "eventually", so an
+// order-based pairing breaks the moment two tool calls interleave.
 export type OctoEvent =
   | { type: 'session_list'; sessions: OctoSession[] }
   | { type: 'output'; content: string }
-  | { type: 'tool_call'; name: string; args: unknown; summary?: string }
-  | { type: 'tool_result'; result: string; ui_payload?: unknown }
-  | { type: 'tool_error'; error: string }
-  | { type: 'tool_stdout'; lines: string[] }
+  | { type: 'tool_call'; name: string; args: unknown; summary?: string; tool_id?: string }
+  | { type: 'tool_result'; result: string; ui_payload?: UIPayload; tool_id?: string }
+  | { type: 'tool_error'; error: string; tool_id?: string }
+  | { type: 'tool_stdout'; lines: string[]; tool_id?: string }
   | { type: 'progress'; message?: string; progress_type?: string; phase: string }
   | { type: 'complete'; iterations: number; awaiting_user_feedback?: boolean }
   | { type: 'session_update'; status?: string; context_usage?: number; working_dir?: string }

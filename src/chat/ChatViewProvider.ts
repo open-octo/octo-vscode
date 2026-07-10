@@ -4,6 +4,8 @@ import * as vscode from 'vscode';
 
 import { ChatSessionManager } from './ChatSessionManager';
 import { ConnectionController } from '../connection/ConnectionController';
+import { openDiffFromWebview, openEditDiffPreview, openEditDiffResult, openFileAtPath } from '../context/diffView';
+import type { OctoEvent } from '../octoClient/octoClient';
 import {
   captureSelectionContext,
   combineContext,
@@ -20,7 +22,9 @@ type InboundMessage =
   | { command: 'confirm'; id: string; result: string }
   | { command: 'answerQuestion'; questionId: string; choices: string[]; custom: string; cancelled: boolean }
   | { command: 'pickFile' }
-  | { command: 'removeAttachment'; label: string };
+  | { command: 'removeAttachment'; label: string }
+  | { command: 'openFile'; path: string }
+  | { command: 'viewDiff'; diff: string; path?: string };
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewId = 'octo.chatView';
@@ -49,7 +53,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const subscriptions: vscode.Disposable[] = [
       this.controller.onStateChange((state) => post({ command: 'connectionState', state })),
-      this.session.onEvent((event) => post({ command: 'event', event })),
+      this.session.onEvent((event) => {
+        post({ command: 'event', event });
+        this.autoOpenDiff(event);
+      }),
       webviewView.webview.onDidReceiveMessage((message: InboundMessage) => this.handleMessage(message, post)),
     ];
     webviewView.onDidDispose(() => {
@@ -87,6 +94,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.pendingAttachments.delete(message.label);
         post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
         break;
+      case 'openFile':
+        void openFileAtPath(message.path);
+        break;
+      case 'viewDiff':
+        void openDiffFromWebview(message.diff, message.path);
+        break;
+    }
+  }
+
+  /**
+   * Renders a diff natively the moment it's actionable, without waiting for
+   * a click: a pending edit_file permission ask (so the user can actually
+   * see what they're approving, not just the modal's plain-text preview),
+   * and a just-applied edit_file result (the acceptance bar this milestone
+   * is built against — "agent 改文件时在编辑器里看到原生 diff"). Both use
+   * preview:true/preserveFocus:true so successive edits reuse one tab
+   * rather than piling up new ones and never steal focus from the sidebar.
+   */
+  private autoOpenDiff(event: OctoEvent): void {
+    if (event.type === 'request_confirmation' && event.diff) {
+      void openEditDiffPreview(event.diff, event.tool_name ?? 'pending edit');
+    } else if (event.type === 'tool_result' && event.ui_payload?.type === 'edit') {
+      void openEditDiffResult(event.ui_payload.diff, event.ui_payload.path);
     }
   }
 
