@@ -32,6 +32,10 @@ export type OctoEvent =
       diff?: string;
       input?: string;
     }
+  // Another client (e.g. the Web UI, on the same session) already answered
+  // this confirmation — close it here too instead of leaving a stale modal
+  // that would double-answer if the user then clicked it.
+  | { type: 'confirmation_complete'; id: string; result: string }
   | {
       type: 'request_user_question';
       question_id: string;

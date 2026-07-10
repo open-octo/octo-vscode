@@ -169,6 +169,11 @@ class ChatState {
       case 'request_confirmation':
         this.pendingConfirmation = event;
         break;
+      case 'confirmation_complete':
+        if (this.pendingConfirmation?.id === event.id) {
+          this.pendingConfirmation = null;
+        }
+        break;
       case 'request_user_question':
         this.pendingQuestion = event;
         break;

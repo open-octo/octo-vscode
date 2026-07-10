@@ -52,6 +52,10 @@ export type OctoEvent =
   | { type: 'complete'; iterations: number; awaiting_user_feedback?: boolean }
   | { type: 'session_update'; status?: string; context_usage?: number; working_dir?: string }
   | { type: 'request_confirmation'; id: string; message: string; kind: string; tool_name?: string; command?: string; diff?: string; input?: string }
+  // Another client (e.g. the Web UI, on the same session) already answered
+  // this confirmation — close it here too instead of leaving a stale modal
+  // that would double-answer if the user then clicked it.
+  | { type: 'confirmation_complete'; id: string; result: string }
   | { type: 'request_user_question'; question_id: string; question: string; options: string[]; multi_select: boolean; header?: string }
   | { type: 'dismiss_user_question'; question_id: string }
   | { type: 'session_deleted'; session_id: string }
