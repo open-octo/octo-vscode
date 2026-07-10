@@ -51,6 +51,9 @@ export function activate(context: vscode.ExtensionContext): void {
       controller.disconnect();
       void controller.connect();
     }),
+    vscode.commands.registerCommand('octo.switchSession', () => {
+      void chatViewProvider.showSessionPicker();
+    }),
   );
 
   void controller.connect();

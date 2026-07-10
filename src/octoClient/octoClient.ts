@@ -83,7 +83,15 @@ export type OctoEvent =
   | { type: 'request_user_question'; question_id: string; question: string; options: string[]; multi_select: boolean; header?: string }
   | { type: 'dismiss_user_question'; question_id: string }
   | { type: 'session_deleted'; session_id: string }
-  | { type: 'session_activity'; session_id: string; kind: string };
+  | { type: 'session_activity'; session_id: string; kind: string }
+  // REST history replay only (GET /api/sessions/{id}/messages) — an
+  // intermediate tool-round's reasoning, standalone because that round has
+  // no answer bubble of its own to attach it to. No live counterpart (live
+  // streams thinking_delta and folds the final round's reasoning into
+  // assistant_message.thinking instead). Currently unhandled: reasoning
+  // display is already best-effort (show_reasoning is off by default), so
+  // a toolless intermediate round's trace just doesn't render in replay.
+  | { type: 'thinking'; text: string };
 
 export interface OctoClientEvents {
   onOpen?: () => void;
@@ -134,6 +142,10 @@ export class OctoClient {
     this.send({ type: 'subscribe', session_id: sessionId });
   }
 
+  unsubscribe(sessionId: string): void {
+    this.send({ type: 'unsubscribe', session_id: sessionId });
+  }
+
   sendUserMessage(sessionId: string, content: string, files?: OctoUserFile[]): void {
     this.send({
       type: 'user_message',
@@ -174,6 +186,15 @@ export class OctoClient {
   async listSessions(): Promise<OctoSession[]> {
     const body = (await this.fetchJson('/api/sessions')) as { sessions?: Record<string, unknown>[] };
     return (body.sessions ?? []).map(normalizeSession);
+  }
+
+  /** History replay events — see OctoEvent's doc comment for how this
+   * vocabulary differs from the live stream (no session_id, no deltas). */
+  async getSessionMessages(sessionId: string): Promise<OctoEvent[]> {
+    const body = (await this.fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`)) as {
+      events?: unknown[];
+    };
+    return (body.events ?? []) as OctoEvent[];
   }
 
   async setWorkingDir(sessionId: string, workingDir: string): Promise<void> {

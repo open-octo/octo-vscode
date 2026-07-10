@@ -24,7 +24,13 @@ type InboundMessage =
   | { command: 'pickFile' }
   | { command: 'removeAttachment'; label: string }
   | { command: 'openFile'; path: string }
-  | { command: 'viewDiff'; diff: string; path?: string };
+  | { command: 'viewDiff'; diff: string; path?: string }
+  | { command: 'listSessions' };
+
+interface SessionPickItem extends vscode.QuickPickItem {
+  // Undefined means "start a new session" — the sentinel first entry.
+  sessionId?: string;
+}
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewId = 'octo.chatView';
@@ -57,6 +63,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         post({ command: 'event', event });
         this.autoOpenDiff(event);
       }),
+      this.session.onHistoryLoaded(({ sessionId, events }) => post({ command: 'history', sessionId, events })),
       webviewView.webview.onDidReceiveMessage((message: InboundMessage) => this.handleMessage(message, post)),
     ];
     webviewView.onDidDispose(() => {
@@ -100,6 +107,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'viewDiff':
         void openDiffFromWebview(message.diff, message.path);
         break;
+      case 'listSessions':
+        void this.showSessionPicker();
+        break;
     }
   }
 
@@ -117,6 +127,37 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       void openEditDiffPreview(event.diff, event.tool_name ?? 'pending edit');
     } else if (event.type === 'tool_result' && event.ui_payload?.type === 'edit') {
       void openEditDiffResult(event.ui_payload.diff, event.ui_payload.path);
+    }
+  }
+
+  /**
+   * Native quick pick over sessions bound to the current workspace, plus a
+   * "+ New session" entry — reachable from the webview's Sessions button
+   * and the octo.switchSession command. Not a custom list UI: the sidebar
+   * is too narrow to usefully compete with the chat transcript for space,
+   * and quick pick already does fuzzy search over the list.
+   */
+  async showSessionPicker(): Promise<void> {
+    try {
+      const sessions = await this.session.listWorkspaceSessions();
+      const items: SessionPickItem[] = [
+        { label: '$(add) New session', alwaysShow: true },
+        ...sessions.map((s) => ({
+          label: s.name || 'Untitled',
+          description: s.status,
+          detail: s.id === this.session.getSessionId() ? 'current' : undefined,
+          sessionId: s.id,
+        })),
+      ];
+      const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Switch octo session' });
+      if (!picked) return;
+      if (picked.sessionId) {
+        await this.session.switchToSession(picked.sessionId);
+      } else {
+        await this.session.startNewSession();
+      }
+    } catch (err) {
+      void vscode.window.showErrorMessage(`octo: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

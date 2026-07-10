@@ -56,7 +56,11 @@ export type OctoEvent =
     }
   | { type: 'dismiss_user_question'; question_id: string }
   | { type: 'session_deleted'; session_id: string }
-  | { type: 'session_activity'; session_id: string; kind: string };
+  | { type: 'session_activity'; session_id: string; kind: string }
+  // REST history replay only — see octoClient.ts's OctoEvent doc comment.
+  // Currently unhandled: a toolless intermediate round's reasoning trace
+  // just doesn't render in replay (reasoning display is best-effort anyway).
+  | { type: 'thinking'; text: string };
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'failed';
 
@@ -68,7 +72,11 @@ export type InboundHostMessage =
   | { command: 'attachments'; labels: string[] }
   // What actually got attached to the message that was just sent (selection
   // + any pending files) — the webview annotates the just-pushed user block.
-  | { command: 'contextAttached'; labels: string[] };
+  | { command: 'contextAttached'; labels: string[] }
+  // The chat view switched to a (possibly different, possibly brand new)
+  // session — replaces the transcript with the replayed history (empty for
+  // a new session).
+  | { command: 'history'; sessionId: string; events: OctoEvent[] };
 
 export type OutboundHostMessage =
   | { command: 'ready' }
@@ -79,4 +87,7 @@ export type OutboundHostMessage =
   | { command: 'pickFile' }
   | { command: 'removeAttachment'; label: string }
   | { command: 'openFile'; path: string }
-  | { command: 'viewDiff'; diff: string; path?: string };
+  | { command: 'viewDiff'; diff: string; path?: string }
+  // Opens the native session-picker quick pick (see ChatViewProvider) —
+  // the webview has no session-list UI of its own.
+  | { command: 'listSessions' };

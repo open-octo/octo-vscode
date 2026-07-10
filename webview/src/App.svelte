@@ -16,6 +16,12 @@
 </script>
 
 <div class="app">
+  <div class="header">
+    <button class="header-btn" onclick={() => chatState.switchSessions()} title="Switch or start a session">
+      Sessions
+    </button>
+  </div>
+
   {#if connectionLabel}
     <div class="banner" class:error={chatState.connectionState === 'failed'}>{connectionLabel}</div>
   {/if}
@@ -71,6 +77,26 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+  }
+  .header {
+    display: flex;
+    justify-content: flex-end;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+  }
+  .header-btn {
+    height: 22px;
+    padding: 0 8px;
+    border: none;
+    background: transparent;
+    color: var(--vscode-foreground);
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    border-radius: 4px;
+  }
+  .header-btn:hover {
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
   }
   .banner {
     padding: 6px 10px;

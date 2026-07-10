@@ -103,8 +103,20 @@ export class ConnectionController {
     this.requireClient().subscribe(sessionId);
   }
 
+  unsubscribe(sessionId: string): void {
+    this.requireClient().unsubscribe(sessionId);
+  }
+
   async createSession(opts: { name?: string; workingDir?: string }): Promise<OctoSession> {
     return this.requireClient().createSession(opts);
+  }
+
+  async listSessions(): Promise<OctoSession[]> {
+    return this.requireClient().listSessions();
+  }
+
+  async getSessionMessages(sessionId: string): Promise<OctoEvent[]> {
+    return this.requireClient().getSessionMessages(sessionId);
   }
 
   sendUserMessage(sessionId: string, content: string, files?: OctoUserFile[]): void {

@@ -75,6 +75,35 @@ class ChatState {
         if (lastUser && message.labels.length) lastUser.attachments = message.labels;
         break;
       }
+      case 'history':
+        this.loadHistory(message.events);
+        break;
+    }
+  }
+
+  /**
+   * Replaces the transcript with a session's replayed history (switching
+   * sessions, or starting a brand new one with an empty array). Unlike
+   * live handleEvent(), this DOES render history_user_message — replayed
+   * user messages have no local optimistic push to fall back on, and
+   * unlike the live path there's no risk of double-rendering since this
+   * only ever runs once per session switch, never alongside a live send.
+   */
+  private loadHistory(events: OctoEvent[]): void {
+    this.blocks = [];
+    this.toolBlocksById.clear();
+    this.busy = false;
+    this.status = null;
+    this.thinking = null;
+    this.sendError = null;
+    this.pendingConfirmation = null;
+    this.pendingQuestion = null;
+    for (const event of events) {
+      if (event.type === 'history_user_message') {
+        this.blocks.push({ kind: 'user', text: event.content });
+      } else {
+        this.handleEvent(event);
+      }
     }
   }
 
@@ -109,6 +138,10 @@ class ChatState {
 
   viewDiff(diff: string, path?: string): void {
     postToHost({ command: 'viewDiff', diff, path });
+  }
+
+  switchSessions(): void {
+    postToHost({ command: 'listSessions' });
   }
 
   answerConfirmation(id: string, result: string): void {

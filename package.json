@@ -54,6 +54,10 @@
       {
         "command": "octo.reconnect",
         "title": "octo: Reconnect"
+      },
+      {
+        "command": "octo.switchSession",
+        "title": "octo: Switch Session"
       }
     ],
     "viewsContainers": {
