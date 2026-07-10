@@ -89,6 +89,31 @@ export class ConnectionController {
     return this.state;
   }
 
+  /**
+   * Resolves once the client is usable, rejecting if the connection attempt
+   * fails instead. Session-affecting calls (startNewSession, switchToSession)
+   * can fire before connect() finishes — e.g. a fast click on the sidebar's
+   * "New Session" welcome-view button right after activation, while the
+   * daemon health check is still polling — and requireClient() throwing
+   * synchronously in that window produced an unhandled, unfriendly toast
+   * instead of the operation simply proceeding once ready.
+   */
+  async ready(): Promise<void> {
+    if (this.state === 'connected') return;
+    if (this.state === 'failed') throw new Error(this.describe());
+    await new Promise<void>((resolve, reject) => {
+      const sub = this.onStateChange((state) => {
+        if (state === 'connected') {
+          sub.dispose();
+          resolve();
+        } else if (state === 'failed') {
+          sub.dispose();
+          reject(new Error(this.describe()));
+        }
+      });
+    });
+  }
+
   describe(): string {
     const config = readConfig();
     const base = `http://${config.host}:${config.port}`;

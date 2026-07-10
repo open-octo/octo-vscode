@@ -11,6 +11,7 @@ function fakeController(events: unknown[] = []) {
   const controller = {
     onEvent: vi.fn(() => ({ dispose: () => {} })),
     onStateChange: vi.fn(() => ({ dispose: () => {} })),
+    ready: vi.fn(async () => {}),
     unsubscribe: vi.fn((id: string) => calls.push(`unsubscribe:${id}`)),
     subscribe: vi.fn((id: string) => calls.push(`subscribe:${id}`)),
     getSessionMessages: vi.fn(async (id: string) => {
@@ -79,6 +80,31 @@ describe('ChatSessionManager.switchToSession', () => {
 
     expect(calls2).toContain('getSessionMessages:session-9');
     expect(manager2.getSessionId()).toBe('session-9');
+  });
+
+  it('waits for the connection to be ready before touching the client', async () => {
+    // Regression test: startNewSession()/switchToSession() used to call
+    // straight through to controller methods that throw synchronously
+    // ("octo: not connected") if invoked before connect() finishes — e.g. a
+    // fast click on the sidebar's "New Session" welcome-view button right
+    // after activation. ready() must resolve before any controller call.
+    const { controller, calls } = fakeController();
+    let releaseReady = () => {};
+    controller.ready = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseReady = resolve;
+        }),
+    );
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    const pending = manager.startNewSession();
+    expect(calls).toEqual([]);
+
+    releaseReady();
+    await pending;
+
+    expect(calls).toEqual(['createSession', 'subscribe:new-session']);
   });
 
   it('clears the persisted session id if it no longer exists on the server', async () => {

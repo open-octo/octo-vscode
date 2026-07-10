@@ -48,7 +48,11 @@ export class ChatPanel {
     session: ChatSessionManager,
   ): Promise<void> {
     ChatPanel.ensurePanel(extensionUri, controller, session).reveal();
-    await session.startNewSession();
+    // A genuine connection failure here was already reported once by
+    // ConnectionController.connect()'s own showErrorMessage; the panel's
+    // connectionState banner reflects it too, so swallow rather than
+    // surface a second, redundant notification.
+    await session.startNewSession().catch(() => undefined);
   }
 
   static async openSession(
@@ -59,7 +63,7 @@ export class ChatPanel {
   ): Promise<void> {
     ChatPanel.ensurePanel(extensionUri, controller, session).reveal();
     if (sessionId !== session.getSessionId()) {
-      await session.switchToSession(sessionId);
+      await session.switchToSession(sessionId).catch(() => undefined);
     }
   }
 

@@ -115,6 +115,7 @@ export class ChatSessionManager {
    * this exact ordering bug and fixed it the same way (its comment: "Subscribe
    * only after history renders"). */
   async switchToSession(sessionId: string): Promise<void> {
+    await this.controller.ready();
     if (this.sessionId && this.sessionId !== sessionId) {
       this.controller.unsubscribe(this.sessionId);
     }
@@ -130,6 +131,7 @@ export class ChatSessionManager {
    * ensureSession() so the picker's "+ New session" entry is immediate and
    * visible rather than waiting for the user's first message. */
   async startNewSession(): Promise<string> {
+    await this.controller.ready();
     if (this.sessionId) {
       this.controller.unsubscribe(this.sessionId);
     }
