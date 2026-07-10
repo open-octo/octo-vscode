@@ -36,7 +36,7 @@ function virtualUri(id: number, side: 'before' | 'after', label: string): vscode
   return vscode.Uri.from({ scheme: SCHEME, path: `/${id}/${side}/${label}` });
 }
 
-interface EditDiffLines {
+export interface EditDiffLines {
   before: string;
   after: string;
 }
@@ -48,7 +48,7 @@ interface EditDiffLines {
  * diff (no @@ hunks, no shared context lines) — so a straight prefix-strip
  * reconstructs it losslessly (modulo the server's own ~24-line/1600-char cap).
  */
-function parseEditDiffBlock(diff: string): EditDiffLines {
+export function parseEditDiffBlock(diff: string): EditDiffLines {
   const before: string[] = [];
   const after: string[] = [];
   for (const line of diff.split('\n')) {

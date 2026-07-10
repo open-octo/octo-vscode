@@ -1,0 +1,96 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { ChatSessionManager } from './ChatSessionManager';
+import type { ConnectionController } from '../connection/ConnectionController';
+
+// Duck-typed fake covering exactly the ConnectionController surface
+// ChatSessionManager calls, with a call log so ordering can be asserted —
+// the thing that actually matters here, not just "was it called".
+function fakeController(events: unknown[] = []) {
+  const calls: string[] = [];
+  const controller = {
+    onEvent: vi.fn(() => ({ dispose: () => {} })),
+    onStateChange: vi.fn(() => ({ dispose: () => {} })),
+    unsubscribe: vi.fn((id: string) => calls.push(`unsubscribe:${id}`)),
+    subscribe: vi.fn((id: string) => calls.push(`subscribe:${id}`)),
+    getSessionMessages: vi.fn(async (id: string) => {
+      calls.push(`getSessionMessages:${id}`);
+      return events;
+    }),
+    createSession: vi.fn(async () => {
+      calls.push('createSession');
+      return { id: 'new-session', name: 'VS Code' };
+    }),
+    listSessions: vi.fn(async () => []),
+  };
+  return { controller: controller as unknown as ConnectionController, calls };
+}
+
+function fakeMemento() {
+  const store = new Map<string, unknown>();
+  return {
+    get: vi.fn((key: string) => store.get(key)),
+    update: vi.fn(async (key: string, value: unknown) => {
+      if (value === undefined) store.delete(key);
+      else store.set(key, value);
+    }),
+  } as unknown as import('vscode').Memento;
+}
+
+describe('ChatSessionManager.switchToSession', () => {
+  it('fetches history before subscribing, not after', async () => {
+    const { controller, calls } = fakeController();
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await manager.switchToSession('session-2');
+
+    // Regression test for the exact bug this ordering caused: subscribing
+    // before history arrives lets a live event for the new session render,
+    // then get silently wiped by loadHistory()'s unconditional reset once
+    // the (now-stale-relative-to-that-event) history response lands.
+    const getIdx = calls.indexOf('getSessionMessages:session-2');
+    const subIdx = calls.indexOf('subscribe:session-2');
+    expect(getIdx).toBeGreaterThanOrEqual(0);
+    expect(subIdx).toBeGreaterThan(getIdx);
+  });
+
+  it('unsubscribes the previous session before fetching the new one', async () => {
+    const { controller, calls } = fakeController();
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await manager.switchToSession('session-1');
+    calls.length = 0;
+    await manager.switchToSession('session-2');
+
+    expect(calls).toEqual(['unsubscribe:session-1', 'getSessionMessages:session-2', 'subscribe:session-2']);
+  });
+
+  it('persists the switched-to session id and restores it', async () => {
+    const { controller } = fakeController();
+    const memento = fakeMemento();
+    const manager = new ChatSessionManager(controller, memento);
+
+    await manager.switchToSession('session-9');
+    expect(memento.get('octo.lastSessionId')).toBe('session-9');
+
+    const { controller: controller2, calls: calls2 } = fakeController();
+    const manager2 = new ChatSessionManager(controller2, memento);
+    await manager2.restoreLastSession();
+
+    expect(calls2).toContain('getSessionMessages:session-9');
+    expect(manager2.getSessionId()).toBe('session-9');
+  });
+
+  it('clears the persisted session id if it no longer exists on the server', async () => {
+    const { controller } = fakeController();
+    controller.getSessionMessages = vi.fn().mockRejectedValue(new Error('404'));
+    const memento = fakeMemento();
+    await memento.update('octo.lastSessionId', 'gone');
+
+    const manager = new ChatSessionManager(controller, memento);
+    await manager.restoreLastSession();
+
+    expect(memento.get('octo.lastSessionId')).toBeUndefined();
+    expect(manager.getSessionId()).toBeNull();
+  });
+});

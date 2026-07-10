@@ -83,6 +83,7 @@
     "build": "node esbuild.config.mjs && npm run build --prefix webview",
     "dev": "node esbuild.config.mjs --watch",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run && npm run test --prefix webview",
     "vscode:prepublish": "node esbuild.config.mjs --production && npm run build --prefix webview"
   },
   "devDependencies": {
@@ -90,7 +91,8 @@
     "@types/vscode": "^1.85.0",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "ws": "^8.21.0"

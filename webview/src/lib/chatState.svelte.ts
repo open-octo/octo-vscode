@@ -32,7 +32,7 @@ export type Block = TextBlock | ToolBlock;
 type PendingConfirmation = Extract<OctoEvent, { type: 'request_confirmation' }>;
 type PendingQuestion = Extract<OctoEvent, { type: 'request_user_question' }>;
 
-class ChatState {
+export class ChatState {
   connectionState: ConnectionState = $state('disconnected');
   blocks: Block[] = $state([]);
   busy: boolean = $state(false);
