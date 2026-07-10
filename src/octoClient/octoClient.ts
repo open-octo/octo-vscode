@@ -11,7 +11,8 @@ export interface OctoSession {
   name: string;
   status?: string;
   workingDir?: string;
-  createdAt?: number;
+  // RFC3339 — sessionItem.CreatedAt is a Go time.Time, not a unix timestamp.
+  createdAt?: string;
 }
 
 export interface OctoUserFile {
@@ -37,8 +38,7 @@ export type OctoEvent =
   | { type: 'request_user_question'; question_id: string; question: string; options: string[]; multi_select: boolean; header?: string }
   | { type: 'dismiss_user_question'; question_id: string }
   | { type: 'session_deleted'; session_id: string }
-  | { type: 'session_activity'; session_id: string; kind: string }
-  | { type: string; [key: string]: unknown };
+  | { type: 'session_activity'; session_id: string; kind: string };
 
 export interface OctoClientEvents {
   onOpen?: () => void;
@@ -213,6 +213,6 @@ function normalizeSession(record: Record<string, unknown>): OctoSession {
     name: String(record.name ?? ''),
     status: typeof record.status === 'string' ? record.status : undefined,
     workingDir: typeof record.working_dir === 'string' ? record.working_dir : undefined,
-    createdAt: typeof record.created_at === 'number' ? record.created_at : undefined,
+    createdAt: typeof record.created_at === 'string' ? record.created_at : undefined,
   };
 }
