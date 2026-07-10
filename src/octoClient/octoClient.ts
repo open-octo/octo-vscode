@@ -25,13 +25,19 @@ export interface OctoUserFile {
 // ui_payload shapes, keyed by tool. Built ad hoc in ws_handlers.go's
 // handleEvent (agent.EventToolDone -> "ui_payload": ev.UI), not declared as
 // named structs in ws_types.go — these mirror internal/tools/edit_file.go,
-// write_file.go, read_file.go, terminal.go's respective `ui := map[string]any{...}`
-// literals, the actual (and only) source of truth for the field names.
+// write_file.go, read_file.go, terminal.go, tasks.go's respective
+// `ui := map[string]any{...}` literals, the actual (and only) source of
+// truth for the field names.
 export type UIPayload =
   | { type: 'edit'; path: string; occurrences: number; diff: string }
   | { type: 'write'; path: string; size_bytes: number; line_count: number; preview: string; preview_truncated: boolean }
   | { type: 'file_read'; path: string; lines_read: number; truncated: boolean; content_preview: string; total_lines?: number }
-  | { type: 'terminal'; command: string; status: string; output_preview: string };
+  | { type: 'terminal'; command: string; status: string; output_preview: string }
+  // Task-tool checklist (tasks.go's taskUI). Rides a tool_result AND
+  // triggers a standalone todo_update broadcast — see OctoEvent below.
+  // No dedicated checklist widget yet: the tool's plain-text Text summary
+  // still renders via tool_result.result, just not as a structured list.
+  | { type: 'todo'; action: string; progress: string; todos: { content: string; status: string }[] };
 
 // Mirrors what ws_handlers.go's handleEvent actually constructs and
 // broadcasts during a live turn — NOT ws_types.go's named structs, several
@@ -56,7 +62,11 @@ export type UIPayload =
 // guarantee otherwise). tool_call has no "summary" field — that was
 // invented from the unused wsEventToolCall struct, never actually sent.
 export type OctoEvent =
-  | { type: 'session_list'; sessions: OctoSession[] }
+  // Sent on connect + refresh. NOT OctoSession-shaped: the wire's
+  // wsSessionInfo carries created_at as a unix-ms number, unlike
+  // sessionItem's RFC3339 string (OctoSession.createdAt) — currently
+  // unconsumed, so left loose rather than mistyped.
+  | { type: 'session_list'; sessions: unknown[] }
   | { type: 'text_delta'; text: string }
   | { type: 'thinking_delta'; text: string }
   | { type: 'assistant_message'; content: string; thinking?: string }
@@ -65,6 +75,10 @@ export type OctoEvent =
   | { type: 'tool_result'; result: string; ui_payload?: UIPayload; tool_id?: string }
   | { type: 'tool_error'; error: string; tool_id?: string }
   | { type: 'tool_stdout'; lines: string[]; tool_id?: string }
+  // Rides alongside a tool_result whose ui_payload.type is "todo" — same
+  // todos list, broadcast standalone so a task-list panel doesn't have to
+  // mine it out of tool_result. Currently unconsumed (no such panel yet).
+  | { type: 'todo_update'; todos: { content: string; status: string }[] }
   // message is present only in the REST history-replay snapshot, never on
   // the live turn-start/re-seed broadcasts — those carry progress_type
   // ("thinking") instead, with no message text at all.

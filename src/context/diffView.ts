@@ -27,8 +27,13 @@ export function registerDiffContentProvider(context: vscode.ExtensionContext): v
   context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(SCHEME, provider));
 }
 
+// Uri.from() takes path/query/fragment as separate structured fields rather
+// than parsing one combined string — Uri.parse() on a template literal
+// would misread a label containing '#' or '?' (a plausible file name, e.g.
+// "notes (draft #2).md") as a fragment/query delimiter and silently
+// truncate the path, pointing the diff view at the wrong content.
 function virtualUri(id: number, side: 'before' | 'after', label: string): vscode.Uri {
-  return vscode.Uri.parse(`${SCHEME}:/${id}/${side}/${label}`);
+  return vscode.Uri.from({ scheme: SCHEME, path: `/${id}/${side}/${label}` });
 }
 
 interface EditDiffLines {

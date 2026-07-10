@@ -44,6 +44,11 @@ export class ConnectionController {
   readonly onEvent = this.eventEmitter.event;
 
   async connect(): Promise<void> {
+    // Defensive: no current call site invokes connect() while already
+    // connecting/connected (octo.reconnect disconnects first), but a wiring
+    // mistake here would otherwise silently open a second OctoClient and
+    // leak the first one's socket.
+    if (this.state === 'connecting' || this.state === 'connected') return;
     this.setState('connecting');
     const config = readConfig();
 

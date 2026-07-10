@@ -10,7 +10,10 @@ export type UIPayload =
   | { type: 'edit'; path: string; occurrences: number; diff: string }
   | { type: 'write'; path: string; size_bytes: number; line_count: number; preview: string; preview_truncated: boolean }
   | { type: 'file_read'; path: string; lines_read: number; truncated: boolean; content_preview: string; total_lines?: number }
-  | { type: 'terminal'; command: string; status: string; output_preview: string };
+  | { type: 'terminal'; command: string; status: string; output_preview: string }
+  // Task-tool checklist (tasks.go's taskUI). No dedicated widget yet — the
+  // tool's plain-text summary still renders via tool_result.result.
+  | { type: 'todo'; action: string; progress: string; todos: { content: string; status: string }[] };
 
 // Mirrors what ws_handlers.go's handleEvent actually broadcasts during a
 // live turn — see octoClient.ts's OctoEvent doc comment for the full
@@ -28,6 +31,7 @@ export type OctoEvent =
   | { type: 'tool_result'; result: string; ui_payload?: UIPayload; tool_id?: string }
   | { type: 'tool_error'; error: string; tool_id?: string }
   | { type: 'tool_stdout'; lines: string[]; tool_id?: string }
+  | { type: 'todo_update'; todos: { content: string; status: string }[] }
   | { type: 'progress'; message?: string; progress_type?: string; phase: string }
   | { type: 'complete'; iterations: number; awaiting_user_feedback?: boolean }
   | { type: 'turn_done'; reply: { content: string } }

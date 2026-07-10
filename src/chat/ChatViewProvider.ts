@@ -86,13 +86,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.send(message.text, post);
         break;
       case 'interrupt':
-        this.session.interrupt();
+        this.guard(post, () => this.session.interrupt());
         break;
       case 'confirm':
-        this.session.confirm(message.id, message.result);
+        this.guard(post, () => this.session.confirm(message.id, message.result));
         break;
       case 'answerQuestion':
-        this.session.answerUserQuestion(message.questionId, message.choices, message.custom, message.cancelled);
+        this.guard(post, () =>
+          this.session.answerUserQuestion(message.questionId, message.choices, message.custom, message.cancelled),
+        );
         break;
       case 'pickFile':
         this.pickFile(post);
@@ -110,6 +112,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'listSessions':
         void this.showSessionPicker();
         break;
+    }
+  }
+
+  // ConnectionController's action methods throw synchronously when there's
+  // no live client (e.g. the confirmation modal is still up but the server
+  // dropped) — without this, that throw would escape onDidReceiveMessage
+  // uncaught instead of surfacing to the user via the usual sendError path.
+  private guard(post: (message: unknown) => void, fn: () => void): void {
+    try {
+      fn();
+    } catch (err) {
+      post({ command: 'sendError', message: err instanceof Error ? err.message : String(err) });
     }
   }
 

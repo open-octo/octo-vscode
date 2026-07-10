@@ -70,17 +70,23 @@ export class ChatSessionManager {
   }
 
   /** Switches the chat view to an existing session: unsubscribes from
-   * whichever session was active, subscribes to the new one, and replays
-   * its history so the webview can rebuild the transcript. */
+   * whichever session was active, fetches its history, THEN subscribes —
+   * in that order. Subscribing first would open a window where a live
+   * event for the new session (plausible: another client, e.g. the Web
+   * UI, could be mid-turn on it) arrives and renders before the history
+   * response comes back; loadHistory()'s unconditional `blocks = []` would
+   * then wipe it out. octo-agent's own web/src/views/ChatView.svelte hit
+   * this exact ordering bug and fixed it the same way (its comment: "Subscribe
+   * only after history renders"). */
   async switchToSession(sessionId: string): Promise<void> {
     if (this.sessionId && this.sessionId !== sessionId) {
       this.controller.unsubscribe(this.sessionId);
     }
+    const events = await this.controller.getSessionMessages(sessionId);
     this.sessionId = sessionId;
     this.sessionPromise = Promise.resolve(sessionId);
-    this.controller.subscribe(sessionId);
-    const events = await this.controller.getSessionMessages(sessionId);
     this.historyEmitter.fire({ sessionId, events });
+    this.controller.subscribe(sessionId);
   }
 
   /** Explicit "new session" action — distinct from the lazy creation in
