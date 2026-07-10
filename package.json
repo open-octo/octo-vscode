@@ -1,5 +1,5 @@
 {
-  "name": "octo",
+  "name": "octo-agent",
   "displayName": "octo",
   "description": "octo agent in your editor — connects to a local octo serve",
   "version": "0.0.1",
