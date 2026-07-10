@@ -2,7 +2,7 @@
   "name": "octo-agent",
   "displayName": "Octo Agent",
   "description": "octo agent in your editor — connects to a local octo serve",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "open-octo",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -64,6 +64,11 @@
         "command": "octo.newSession",
         "title": "octo: New Session",
         "icon": "$(add)"
+      },
+      {
+        "command": "octo.deleteSession",
+        "title": "octo: Delete Session",
+        "icon": "$(trash)"
       }
     ],
     "viewsContainers": {
@@ -95,6 +100,13 @@
           "command": "octo.newSession",
           "when": "view == octo.sessionsView",
           "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "octo.deleteSession",
+          "when": "view == octo.sessionsView",
+          "group": "inline"
         }
       ]
     }

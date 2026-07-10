@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import { ChatSessionManager } from './ChatSessionManager';
 import { OctoSession } from '../octoClient/octoClient';
 
-class SessionTreeItem extends vscode.TreeItem {
+export class SessionTreeItem extends vscode.TreeItem {
   constructor(readonly session: OctoSession, isCurrent: boolean) {
     super(session.name || 'Untitled', vscode.TreeItemCollapsibleState.None);
     this.description = session.status;

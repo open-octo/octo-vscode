@@ -41,6 +41,19 @@ export class ChatSessionManager {
     private readonly workspaceState: vscode.Memento,
   ) {
     controller.onEvent(({ sessionId, event }) => {
+      // session_deleted is broadcast globally (any client can delete any
+      // session, including this one's own deleteSession()), so it reaches
+      // us here regardless of subscription. Only react if it's the session
+      // currently open in the panel — clear it the same way switching
+      // sessions does, rather than leaving the panel pointed at a session
+      // that no longer exists on the server.
+      if (event.type === 'session_deleted' && event.session_id === this.sessionId) {
+        this.sessionId = null;
+        this.sessionPromise = null;
+        void this.workspaceState.update(LAST_SESSION_KEY, undefined);
+        this.historyEmitter.fire({ sessionId: event.session_id, events: [] });
+        return;
+      }
       if (this.sessionId && sessionId === this.sessionId) {
         this.eventEmitter.fire(event);
       }
@@ -91,6 +104,14 @@ export class ChatSessionManager {
 
   answerUserQuestion(questionId: string, choices: string[], custom: string, cancelled: boolean): void {
     this.controller.answerUserQuestion(questionId, choices, custom, cancelled);
+  }
+
+  /** If this is the session currently open in the panel, the local reset
+   * happens via the server's session_deleted broadcast (see constructor)
+   * rather than here — that also covers another client deleting it. */
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.controller.ready();
+    await this.controller.deleteSession(sessionId);
   }
 
   /** Sessions bound to the current workspace root — best-effort client-side

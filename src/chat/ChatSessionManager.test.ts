@@ -2,14 +2,21 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { ChatSessionManager } from './ChatSessionManager';
 import type { ConnectionController } from '../connection/ConnectionController';
+import type { OctoEvent } from '../octoClient/octoClient';
 
 // Duck-typed fake covering exactly the ConnectionController surface
 // ChatSessionManager calls, with a call log so ordering can be asserted —
-// the thing that actually matters here, not just "was it called".
+// the thing that actually matters here, not just "was it called". Also
+// captures the onEvent callback so tests can simulate a broadcast (e.g.
+// session_deleted) arriving on the connection's raw event stream.
 function fakeController(events: unknown[] = []) {
   const calls: string[] = [];
+  let onEventCallback: ((payload: { sessionId?: string; event: OctoEvent }) => void) | undefined;
   const controller = {
-    onEvent: vi.fn(() => ({ dispose: () => {} })),
+    onEvent: vi.fn((cb: (payload: { sessionId?: string; event: OctoEvent }) => void) => {
+      onEventCallback = cb;
+      return { dispose: () => {} };
+    }),
     onStateChange: vi.fn(() => ({ dispose: () => {} })),
     ready: vi.fn(async () => {}),
     unsubscribe: vi.fn((id: string) => calls.push(`unsubscribe:${id}`)),
@@ -23,8 +30,15 @@ function fakeController(events: unknown[] = []) {
       return { id: 'new-session', name: 'VS Code' };
     }),
     listSessions: vi.fn(async () => []),
+    deleteSession: vi.fn(async (id: string) => {
+      calls.push(`deleteSession:${id}`);
+    }),
   };
-  return { controller: controller as unknown as ConnectionController, calls };
+  return {
+    controller: controller as unknown as ConnectionController,
+    calls,
+    fireEvent: (payload: { sessionId?: string; event: OctoEvent }) => onEventCallback?.(payload),
+  };
 }
 
 function fakeMemento() {
@@ -157,5 +171,44 @@ describe('ChatSessionManager.listWorkspaceSessions', () => {
     const manager = new ChatSessionManager(controller, fakeMemento());
 
     await expect(manager.listWorkspaceSessions()).resolves.toEqual([]);
+  });
+});
+
+describe('ChatSessionManager.deleteSession', () => {
+  it('deletes via the connection controller', async () => {
+    const { controller, calls } = fakeController();
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await manager.deleteSession('session-1');
+
+    expect(calls).toEqual(['deleteSession:session-1']);
+  });
+
+  it('clears local state when the deleted session is the one open in the panel', async () => {
+    // session_deleted is a global broadcast, so this covers both
+    // deleteSession() deleting the active session itself and another
+    // client (a different VS Code window, the Web UI) deleting it instead.
+    const { controller, fireEvent } = fakeController();
+    const memento = fakeMemento();
+    const manager = new ChatSessionManager(controller, memento);
+    await manager.switchToSession('session-1');
+
+    let history: unknown;
+    manager.onHistoryLoaded((h) => (history = h));
+    fireEvent({ sessionId: 'session-1', event: { type: 'session_deleted', session_id: 'session-1' } });
+
+    expect(manager.getSessionId()).toBeNull();
+    expect(memento.get('octo.lastSessionId')).toBeUndefined();
+    expect(history).toEqual({ sessionId: 'session-1', events: [] });
+  });
+
+  it('leaves local state alone when a different session is deleted', async () => {
+    const { controller, fireEvent } = fakeController();
+    const manager = new ChatSessionManager(controller, fakeMemento());
+    await manager.switchToSession('session-1');
+
+    fireEvent({ sessionId: 'session-2', event: { type: 'session_deleted', session_id: 'session-2' } });
+
+    expect(manager.getSessionId()).toBe('session-1');
   });
 });

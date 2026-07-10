@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 
 import { ChatPanel } from './chat/ChatPanel';
 import { ChatSessionManager } from './chat/ChatSessionManager';
-import { SessionListProvider } from './chat/SessionListProvider';
+import { SessionListProvider, SessionTreeItem } from './chat/SessionListProvider';
 import { ConnectionController } from './connection/ConnectionController';
 import { registerDiffContentProvider } from './context/diffView';
 import { trackActiveEditor } from './context/editorContext';
@@ -49,6 +49,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // tick rather than trying to guess which ones actually change the list.
   context.subscriptions.push(session.onEvent(() => sessionList.refresh()));
   context.subscriptions.push(session.onHistoryLoaded(() => sessionList.refresh()));
+  // session_deleted is broadcast globally and can name a session other than
+  // whichever one is currently open in the panel (session.onEvent above only
+  // fires for the active one) — listen on the raw connection stream so a
+  // deletion from any client, of any session, still drops it from the list.
+  context.subscriptions.push(
+    controller.onEvent(({ event }) => {
+      if (event.type === 'session_deleted') sessionList.refresh();
+    }),
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('octo.showStatus', () => {
@@ -63,6 +72,23 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('octo.openSession', (sessionId: string) => {
       void ChatPanel.openSession(context.extensionUri, controller, session, sessionId);
+    }),
+    vscode.commands.registerCommand('octo.deleteSession', async (item: SessionTreeItem) => {
+      const label = item.session.name || 'Untitled';
+      const confirmed = await vscode.window.showWarningMessage(
+        `Delete session "${label}"? This cannot be undone.`,
+        { modal: true },
+        'Delete',
+      );
+      if (confirmed !== 'Delete') return;
+      try {
+        await session.deleteSession(item.session.id);
+        sessionList.refresh();
+      } catch (err) {
+        void vscode.window.showErrorMessage(
+          `octo: failed to delete session — ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }),
   );
 

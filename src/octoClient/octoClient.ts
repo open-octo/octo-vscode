@@ -227,6 +227,10 @@ export class OctoClient {
     });
   }
 
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+  }
+
   private open(): void {
     if (this.ws) return;
 

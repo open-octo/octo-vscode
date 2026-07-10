@@ -149,6 +149,10 @@ export class ConnectionController {
     return this.requireClient().getSessionMessages(sessionId);
   }
 
+  async deleteSession(sessionId: string): Promise<void> {
+    return this.requireClient().deleteSession(sessionId);
+  }
+
   sendUserMessage(sessionId: string, content: string, files?: OctoUserFile[]): void {
     this.requireClient().sendUserMessage(sessionId, content, files);
   }
