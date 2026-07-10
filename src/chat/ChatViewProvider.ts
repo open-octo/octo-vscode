@@ -4,6 +4,13 @@ import * as vscode from 'vscode';
 
 import { ChatSessionManager } from './ChatSessionManager';
 import { ConnectionController } from '../connection/ConnectionController';
+import {
+  captureSelectionContext,
+  combineContext,
+  pickWorkspaceFile,
+  readFileAttachment,
+  type CapturedAttachment,
+} from '../context/editorContext';
 
 // Messages the webview sends to the extension host.
 type InboundMessage =
@@ -11,10 +18,18 @@ type InboundMessage =
   | { command: 'send'; text: string }
   | { command: 'interrupt' }
   | { command: 'confirm'; id: string; result: string }
-  | { command: 'answerQuestion'; questionId: string; choices: string[]; custom: string; cancelled: boolean };
+  | { command: 'answerQuestion'; questionId: string; choices: string[]; custom: string; cancelled: boolean }
+  | { command: 'pickFile' }
+  | { command: 'removeAttachment'; label: string };
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   static readonly viewId = 'octo.chatView';
+
+  // Keyed by label (the relative path) so re-picking the same file just
+  // refreshes its content rather than duplicating a chip. Lives on the
+  // provider, not per resolveWebviewView call, so it survives the webview
+  // being hidden and recreated before the user sends.
+  private readonly pendingAttachments = new Map<string, CapturedAttachment>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -42,19 +57,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
 
     // The view may be recreated (hidden then shown again) without the
-    // extension host restarting — resend the state the fresh webview missed.
+    // extension host restarting — resend the state a fresh webview missed.
     post({ command: 'connectionState', state: this.controller.getState() });
+    post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
   }
 
   private handleMessage(message: InboundMessage, post: (message: unknown) => void): void {
     switch (message.command) {
       case 'ready':
         post({ command: 'connectionState', state: this.controller.getState() });
+        post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
         break;
       case 'send':
-        this.session.sendMessage(message.text).catch((err) => {
-          post({ command: 'sendError', message: err instanceof Error ? err.message : String(err) });
-        });
+        this.send(message.text, post);
         break;
       case 'interrupt':
         this.session.interrupt();
@@ -65,6 +80,41 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       case 'answerQuestion':
         this.session.answerUserQuestion(message.questionId, message.choices, message.custom, message.cancelled);
         break;
+      case 'pickFile':
+        this.pickFile(post);
+        break;
+      case 'removeAttachment':
+        this.pendingAttachments.delete(message.label);
+        post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
+        break;
+    }
+  }
+
+  private send(text: string, post: (message: unknown) => void): void {
+    const attachments = [...this.pendingAttachments.values()];
+    const selection = captureSelectionContext();
+    if (selection) attachments.push(selection);
+
+    this.pendingAttachments.clear();
+    post({ command: 'attachments', labels: [] });
+    if (attachments.length) {
+      post({ command: 'contextAttached', labels: attachments.map((a) => a.label) });
+    }
+
+    this.session.sendMessage(combineContext(attachments, text)).catch((err) => {
+      post({ command: 'sendError', message: err instanceof Error ? err.message : String(err) });
+    });
+  }
+
+  private async pickFile(post: (message: unknown) => void): Promise<void> {
+    const uri = await pickWorkspaceFile();
+    if (!uri) return;
+    try {
+      const attachment = await readFileAttachment(uri);
+      this.pendingAttachments.set(attachment.label, attachment);
+      post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
+    } catch (err) {
+      post({ command: 'sendError', message: `Failed to read file: ${err instanceof Error ? err.message : String(err)}` });
     }
   }
 

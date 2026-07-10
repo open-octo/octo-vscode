@@ -14,6 +14,10 @@ export type ToolBlock = {
 export type TextBlock = {
   kind: 'user' | 'assistant';
   text: string;
+  // Selection/file context attached to this turn — set on 'user' blocks
+  // once the host reports back what it actually attached (see
+  // ChatViewProvider.send). Never set for 'assistant'.
+  attachments?: string[];
 };
 
 export type Block = TextBlock | ToolBlock;
@@ -29,6 +33,8 @@ class ChatState {
   sendError: string | null = $state(null);
   pendingConfirmation: PendingConfirmation | null = $state(null);
   pendingQuestion: PendingQuestion | null = $state(null);
+  // Files picked via 'Attach file', queued for the next send.
+  pendingAttachments: string[] = $state([]);
 
   handleHostMessage(message: InboundHostMessage): void {
     switch (message.command) {
@@ -42,6 +48,14 @@ class ChatState {
         this.busy = false;
         this.sendError = message.message;
         break;
+      case 'attachments':
+        this.pendingAttachments = message.labels;
+        break;
+      case 'contextAttached': {
+        const lastUser = this.lastUserBlock();
+        if (lastUser && message.labels.length) lastUser.attachments = message.labels;
+        break;
+      }
     }
   }
 
@@ -57,6 +71,14 @@ class ChatState {
 
   interrupt(): void {
     postToHost({ command: 'interrupt' });
+  }
+
+  pickFile(): void {
+    postToHost({ command: 'pickFile' });
+  }
+
+  removeAttachment(label: string): void {
+    postToHost({ command: 'removeAttachment', label });
   }
 
   answerConfirmation(id: string, result: string): void {
@@ -145,6 +167,14 @@ class ChatState {
       if (block.kind === 'tool' && block.result === undefined && block.error === undefined) {
         return block;
       }
+    }
+    return undefined;
+  }
+
+  private lastUserBlock(): TextBlock | undefined {
+    for (let i = this.blocks.length - 1; i >= 0; i--) {
+      const block = this.blocks[i];
+      if (block.kind === 'user') return block;
     }
     return undefined;
   }

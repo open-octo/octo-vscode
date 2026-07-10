@@ -40,11 +40,18 @@ export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'fai
 export type InboundHostMessage =
   | { command: 'connectionState'; state: ConnectionState }
   | { command: 'event'; event: OctoEvent }
-  | { command: 'sendError'; message: string };
+  | { command: 'sendError'; message: string }
+  // Pending file attachments picked via the native quick pick, not yet sent.
+  | { command: 'attachments'; labels: string[] }
+  // What actually got attached to the message that was just sent (selection
+  // + any pending files) — the webview annotates the just-pushed user block.
+  | { command: 'contextAttached'; labels: string[] };
 
 export type OutboundHostMessage =
   | { command: 'ready' }
   | { command: 'send'; text: string }
   | { command: 'interrupt' }
   | { command: 'confirm'; id: string; result: string }
-  | { command: 'answerQuestion'; questionId: string; choices: string[]; custom: string; cancelled: boolean };
+  | { command: 'answerQuestion'; questionId: string; choices: string[]; custom: string; cancelled: boolean }
+  | { command: 'pickFile' }
+  | { command: 'removeAttachment'; label: string };

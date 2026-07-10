@@ -33,6 +33,11 @@
       </div>
     {:else}
       <div class="bubble" class:user={block.kind === 'user'} class:assistant={block.kind === 'assistant'}>
+        {#if block.attachments?.length}
+          <div class="attachments">
+            {#each block.attachments as label}<span class="attachment-chip">{label}</span>{/each}
+          </div>
+        {/if}
         {block.text}
       </div>
     {/if}
@@ -64,6 +69,20 @@
   }
   .bubble.assistant {
     background: transparent;
+  }
+  .attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+  .attachment-chip {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--vscode-badge-background);
+    color: var(--vscode-badge-foreground);
+    font-size: 11px;
+    font-family: var(--vscode-editor-font-family);
   }
   .tool {
     border: 1px solid var(--vscode-widget-border);

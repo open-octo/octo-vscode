@@ -32,8 +32,11 @@
   <Composer
     disabled={chatState.connectionState !== 'connected'}
     busy={chatState.busy}
+    pendingAttachments={chatState.pendingAttachments}
     onSend={(text) => chatState.sendMessage(text)}
     onInterrupt={() => chatState.interrupt()}
+    onPickFile={() => chatState.pickFile()}
+    onRemoveAttachment={(label) => chatState.removeAttachment(label)}
   />
 </div>
 
