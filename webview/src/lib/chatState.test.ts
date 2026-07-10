@@ -130,6 +130,32 @@ describe('ChatState history replay', () => {
     ]);
   });
 
+  it('strips embedded selection/file context out of a replayed user message, showing only what was typed', () => {
+    const state = new ChatState();
+    const rawContent =
+      'Selected code (src/foo.ts:12-34):\n```ts\nconst x = 1\n```\n' +
+      '\n\n---\n\n' +
+      'Attached file: src/bar.ts\n```ts\nexport const y = 2\n```\n' +
+      '\n\n---\n\n' +
+      'What does this code do?';
+    state.handleHostMessage({
+      command: 'history',
+      sessionId: 's1',
+      events: [{ type: 'history_user_message', content: rawContent }],
+    });
+
+    // Splitting on the LAST separator: only the true typed text ends up as
+    // `text`; everything before it (even multiple attachment blocks) is
+    // context, reduced to just its labels.
+    expect(state.blocks).toEqual([
+      {
+        kind: 'user',
+        text: 'What does this code do?',
+        attachments: ['src/foo.ts:12-34', 'src/bar.ts'],
+      },
+    ]);
+  });
+
   it('pairs replayed tool_call/tool_result by tool_id same as live', () => {
     const state = new ChatState();
     state.handleHostMessage({

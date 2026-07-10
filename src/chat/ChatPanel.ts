@@ -7,7 +7,7 @@ import { ConnectionController } from '../connection/ConnectionController';
 import { openDiffFromWebview, openEditDiffPreview, openEditDiffResult, openFileAtPath } from '../context/diffView';
 import type { OctoEvent } from '../octoClient/octoClient';
 import {
-  captureSelectionContext,
+  captureEditorContext,
   combineContext,
   pickWorkspaceFile,
   readFileAttachment,
@@ -180,8 +180,8 @@ export class ChatPanel {
 
   private send(text: string, post: (message: unknown) => void): void {
     const attachments = [...this.pendingAttachments.values()];
-    const selection = captureSelectionContext();
-    if (selection) attachments.push(selection);
+    const editorContext = captureEditorContext();
+    if (editorContext) attachments.push(editorContext);
 
     this.pendingAttachments.clear();
     post({ command: 'attachments', labels: [] });

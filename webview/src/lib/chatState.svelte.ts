@@ -29,6 +29,30 @@ export type TextBlock = {
 
 export type Block = TextBlock | ToolBlock;
 
+// Mirrors src/context/editorContext.ts's combineContext(): attachment
+// blocks (full file/selection content, for the agent) joined by this
+// separator, then the user's actual typed text. Splitting it back apart is
+// display-only — what already got sent to the agent is unaffected — so a
+// user message that happens to contain this exact separator literally is a
+// rare, harmless mis-split, not a correctness bug.
+const CONTEXT_SEPARATOR = '\n\n---\n\n';
+
+function splitContextFromMessage(content: string): { text: string; attachments: string[] } {
+  const idx = content.lastIndexOf(CONTEXT_SEPARATOR);
+  if (idx === -1) return { text: content, attachments: [] };
+
+  const contextBlob = content.slice(0, idx);
+  const text = content.slice(idx + CONTEXT_SEPARATOR.length);
+  const attachments: string[] = [];
+  for (const m of contextBlob.matchAll(/^(?:Selected code|Current file) \(([^)]+)\):/gm)) {
+    attachments.push(m[1]);
+  }
+  for (const m of contextBlob.matchAll(/^Attached file: (.+)$/gm)) {
+    attachments.push(m[1]);
+  }
+  return { text, attachments };
+}
+
 type PendingConfirmation = Extract<OctoEvent, { type: 'request_confirmation' }>;
 type PendingQuestion = Extract<OctoEvent, { type: 'request_user_question' }>;
 
@@ -100,7 +124,8 @@ export class ChatState {
     this.pendingQuestion = null;
     for (const event of events) {
       if (event.type === 'history_user_message') {
-        this.blocks.push({ kind: 'user', text: event.content });
+        const { text, attachments } = splitContextFromMessage(event.content);
+        this.blocks.push({ kind: 'user', text, attachments: attachments.length ? attachments : undefined });
       } else {
         this.handleEvent(event);
       }

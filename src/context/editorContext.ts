@@ -8,21 +8,30 @@ export interface CapturedAttachment {
 const MAX_FILE_BYTES = 100_000;
 
 /**
- * Captures the active editor's current selection, if any, formatted as a
- * fenced code block plus any diagnostics overlapping the selected range —
- * the same red-squiggle errors the user sees are what the agent sees.
- * Returns null when there's no active editor or the selection is empty, so
- * an unrelated question doesn't silently drag in stale selected text.
+ * Captures the active editor's current selection, formatted as a fenced
+ * code block plus any diagnostics overlapping the selected range — the
+ * same red-squiggle errors the user sees are what the agent sees. With no
+ * selection, falls back to the whole open file (from the live editor
+ * buffer, so unsaved edits are included) so there's always situational
+ * awareness of what the user is looking at, matching the design doc's
+ * "当前选区/打开文件的内容" bullet — this covered only the selection half
+ * until now. Returns null only when there's no active editor at all.
  */
-export function captureSelectionContext(): CapturedAttachment | null {
+export function captureEditorContext(): CapturedAttachment | null {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.selection.isEmpty) {
-    return null;
-  }
+  if (!editor) return null;
 
   const document = editor.document;
-  const selection = editor.selection;
   const relativePath = vscode.workspace.asRelativePath(document.uri, false);
+
+  if (editor.selection.isEmpty) {
+    const truncated = document.getText().length > MAX_FILE_BYTES;
+    const text = truncated ? document.getText().slice(0, MAX_FILE_BYTES) : document.getText();
+    const block = `Current file (${relativePath}):\n\`\`\`${document.languageId}\n${text}${truncated ? '\n… (truncated)' : ''}\n\`\`\``;
+    return { label: relativePath, block };
+  }
+
+  const selection = editor.selection;
   const startLine = selection.start.line + 1;
   const endLine = selection.end.line + 1;
   const label = startLine === endLine ? `${relativePath}:${startLine}` : `${relativePath}:${startLine}-${endLine}`;
