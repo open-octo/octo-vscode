@@ -191,7 +191,13 @@ export class ChatSessionManager {
 
   private async createAndBindSession(): Promise<string> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    const session = await this.controller.createSession({ name: 'VS Code', workingDir: workspaceFolder?.uri.fsPath });
+    // No fixed name: octo only auto-generates a sidebar title when the
+    // session's title is still a placeholder (empty, or "Session N" — see
+    // isAutoNamePlaceholder in the server's ws_handlers.go). Passing "VS
+    // Code" here would count as a real title and permanently suppress the
+    // auto-title. Leave it empty and let the server's session_renamed
+    // broadcast fill it in after the first turn.
+    const session = await this.controller.createSession({ workingDir: workspaceFolder?.uri.fsPath });
     this.sessionId = session.id;
     this.sessionPromise = Promise.resolve(session.id);
     void this.workspaceState.update(LAST_SESSION_KEY, session.id);

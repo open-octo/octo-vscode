@@ -49,13 +49,16 @@ export function activate(context: vscode.ExtensionContext): void {
   // tick rather than trying to guess which ones actually change the list.
   context.subscriptions.push(session.onEvent(() => sessionList.refresh()));
   context.subscriptions.push(session.onHistoryLoaded(() => sessionList.refresh()));
-  // session_deleted is broadcast globally and can name a session other than
-  // whichever one is currently open in the panel (session.onEvent above only
-  // fires for the active one) — listen on the raw connection stream so a
-  // deletion from any client, of any session, still drops it from the list.
+  // session_deleted and session_renamed are both broadcast globally and can
+  // name a session other than whichever one is currently open in the panel
+  // (session.onEvent above only fires for the active one) — listen on the raw
+  // connection stream so a deletion or an auto-generated title from any
+  // client, of any session, still updates the list. session_renamed is octo's
+  // post-first-turn auto-title broadcast; refreshing re-fetches the list with
+  // the new name in place.
   context.subscriptions.push(
     controller.onEvent(({ event }) => {
-      if (event.type === 'session_deleted') sessionList.refresh();
+      if (event.type === 'session_deleted' || event.type === 'session_renamed') sessionList.refresh();
     }),
   );
 

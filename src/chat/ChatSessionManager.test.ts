@@ -27,7 +27,9 @@ function fakeController(events: unknown[] = []) {
     }),
     createSession: vi.fn(async () => {
       calls.push('createSession');
-      return { id: 'new-session', name: 'VS Code' };
+      // Empty name mirrors what the server returns for a placeholder session
+      // (see createAndBindSession: no name is sent so octo can auto-title).
+      return { id: 'new-session', name: '' };
     }),
     listSessions: vi.fn(async () => []),
     deleteSession: vi.fn(async (id: string) => {
@@ -119,6 +121,20 @@ describe('ChatSessionManager.switchToSession', () => {
     await pending;
 
     expect(calls).toEqual(['createSession', 'subscribe:new-session']);
+  });
+
+  it('creates sessions without a hardcoded name so octo can auto-generate the title', async () => {
+    // A real name (this used to be "VS Code") counts as a user-set title on
+    // the server and permanently suppresses the post-first-turn auto-title —
+    // so createAndBindSession must send no name at all.
+    const { controller } = fakeController();
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await manager.startNewSession();
+
+    expect(controller.createSession).toHaveBeenCalledTimes(1);
+    const opts = (controller.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(opts).not.toHaveProperty('name');
   });
 
   it('clears the persisted session id if it no longer exists on the server', async () => {

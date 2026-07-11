@@ -97,6 +97,11 @@ export type OctoEvent =
   | { type: 'request_user_question'; question_id: string; question: string; options: string[]; multi_select: boolean; header?: string }
   | { type: 'dismiss_user_question'; question_id: string }
   | { type: 'session_deleted'; session_id: string }
+  // Global broadcast (session_id in the payload, but sent to every client,
+  // not just this session's subscribers) fired once per session after its
+  // first turn, carrying the model-generated sidebar title. See
+  // ws_handlers.go's session_renamed broadcast + isAutoNamePlaceholder.
+  | { type: 'session_renamed'; session_id: string; name: string }
   | { type: 'session_activity'; session_id: string; kind: string }
   // REST history replay only (GET /api/sessions/{id}/messages) — an
   // intermediate tool-round's reasoning, standalone because that round has
