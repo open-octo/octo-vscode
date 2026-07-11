@@ -3,6 +3,7 @@
     disabled,
     busy,
     pendingAttachments,
+    activeFile,
     onSend,
     onInterrupt,
     onPickFile,
@@ -11,6 +12,7 @@
     disabled: boolean;
     busy: boolean;
     pendingAttachments: string[];
+    activeFile: string | null;
     onSend: (text: string) => void;
     onInterrupt: () => void;
     onPickFile: () => void;
@@ -18,6 +20,11 @@
   } = $props();
 
   let draft = $state('');
+
+  // A `path:line` / `path:line-line` label is a pinned selection; a bare path
+  // is a whole-file attachment. Only the caption's shape tells them apart, so
+  // the chip icon keys off it.
+  const isSelection = (label: string): boolean => /:\d/.test(label);
 
   function submit(): void {
     if (!draft.trim() || disabled || busy) return;
@@ -39,10 +46,16 @@
       <div class="chips">
         {#each pendingAttachments as label}
           <span class="chip">
-            <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
-              <path d="M4 2h5l3 3v9H4z" />
-              <path d="M9 2v3h3" />
-            </svg>
+            {#if isSelection(label)}
+              <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 3L2 8l4 5M10 3l4 5-4 5" />
+              </svg>
+            {:else}
+              <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                <path d="M4 2h5l3 3v9H4z" />
+                <path d="M9 2v3h3" />
+              </svg>
+            {/if}
             {label}
             <button class="chip-remove" onclick={() => onRemoveAttachment(label)} aria-label="Remove attachment">×</button>
           </span>
@@ -57,6 +70,16 @@
       placeholder={disabled ? 'Waiting for octo serve…' : 'How can I help you today?'}
       rows="2"
     ></textarea>
+
+    {#if activeFile && !pendingAttachments.length}
+      <div class="context-row" title="Current file — sent as context with your message">
+        <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+          <rect x="2" y="4.5" width="8" height="8" rx="1" />
+          <path d="M6 4.5V3.5a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-1" />
+        </svg>
+        <span class="context-file">In {activeFile}</span>
+      </div>
+    {/if}
 
     <div class="toolbar">
       <button class="icon-btn" disabled={disabled} onclick={onPickFile} title="Attach a file" aria-label="Attach a file">
@@ -132,6 +155,21 @@
     font-family: inherit;
     font-size: 13px;
     line-height: 1.5;
+  }
+  .context-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    padding: 2px 10px 0;
+    color: var(--vscode-descriptionForeground);
+  }
+  .context-file {
+    font-size: 11px;
+    font-family: var(--vscode-editor-font-family);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .toolbar {
     display: flex;

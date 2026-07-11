@@ -74,6 +74,10 @@ export type InboundHostMessage =
   | { command: 'sendError'; message: string }
   // Pending file attachments picked via the native quick pick, not yet sent.
   | { command: 'attachments'; labels: string[] }
+  // The file/selection the host will auto-attach as editor context on the
+  // next send (bare path, or path:line(-line) for a selection), tracking the
+  // active editor live. null when no editor has been focused this session.
+  | { command: 'activeFile'; label: string | null }
   // What actually got attached to the message that was just sent (selection
   // + any pending files) — the webview annotates the just-pushed user block.
   | { command: 'contextAttached'; labels: string[] }

@@ -39,6 +39,7 @@
     disabled={chatState.connectionState !== 'connected'}
     busy={chatState.busy}
     pendingAttachments={chatState.pendingAttachments}
+    activeFile={chatState.activeFile}
     onSend={(text) => chatState.sendMessage(text)}
     onInterrupt={() => chatState.interrupt()}
     onPickFile={() => chatState.pickFile()}

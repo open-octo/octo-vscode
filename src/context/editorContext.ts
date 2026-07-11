@@ -30,37 +30,46 @@ function currentEditor(): vscode.TextEditor | undefined {
   return vscode.window.activeTextEditor ?? lastActiveEditor;
 }
 
+// The label captureEditorContext() would attach for this editor: bare
+// relative path when nothing is selected, path:line(-line) for a selection.
+// Shared so the composer's live indicator can't drift from what actually
+// gets sent.
+function labelFor(editor: vscode.TextEditor): string {
+  const relativePath = vscode.workspace.asRelativePath(editor.document.uri, false);
+  if (editor.selection.isEmpty) return relativePath;
+  const startLine = editor.selection.start.line + 1;
+  const endLine = editor.selection.end.line + 1;
+  return startLine === endLine ? `${relativePath}:${startLine}` : `${relativePath}:${startLine}-${endLine}`;
+}
+
 /**
- * Captures the current (or last-focused, see currentEditor()) editor's
- * selection, formatted as a fenced code block plus any diagnostics
- * overlapping the selected range — the same red-squiggle errors the user
- * sees are what the agent sees. With no selection, falls back to the whole
- * open file (from the live editor buffer, so unsaved edits are included)
- * so there's always situational awareness of what the user is looking at,
- * matching the design doc's "当前选区/打开文件的内容" bullet — this covered
- * only the selection half until now. Returns null only when no editor has
- * ever been focused this session, or the underlying document read fails
- * (e.g. a stale reference to a since-closed tab).
+ * The label of the file/selection that captureEditorContext() would attach
+ * right now, or null when no editor has ever been focused this session.
+ * Drives the composer's "current file" indicator so the user can see, before
+ * sending, exactly what editor context is riding along.
  */
-export function captureEditorContext(): CapturedAttachment | null {
+export function currentEditorLabel(): string | null {
+  const editor = currentEditor();
+  return editor ? labelFor(editor) : null;
+}
+
+/**
+ * Snapshots the current (or last-focused, see currentEditor()) editor's
+ * non-empty selection as a fenced code block plus any diagnostics
+ * overlapping the selected range — the same red-squiggle errors the user
+ * sees are what the agent sees. Returns null when there's no editor or the
+ * selection is empty, so callers can tell "user has actually selected some
+ * lines" apart from "just has a file open". The label (path:line(-line))
+ * doubles as the composer chip caption.
+ */
+export function captureSelection(): CapturedAttachment | null {
   try {
     const editor = currentEditor();
-    if (!editor) return null;
+    if (!editor || editor.selection.isEmpty) return null;
 
     const document = editor.document;
-    const relativePath = vscode.workspace.asRelativePath(document.uri, false);
-
-    if (editor.selection.isEmpty) {
-      const truncated = document.getText().length > MAX_FILE_BYTES;
-      const text = truncated ? document.getText().slice(0, MAX_FILE_BYTES) : document.getText();
-      const block = `Current file (${relativePath}):\n\`\`\`${document.languageId}\n${text}${truncated ? '\n… (truncated)' : ''}\n\`\`\``;
-      return { label: relativePath, block };
-    }
-
     const selection = editor.selection;
-    const startLine = selection.start.line + 1;
-    const endLine = selection.end.line + 1;
-    const label = startLine === endLine ? `${relativePath}:${startLine}` : `${relativePath}:${startLine}-${endLine}`;
+    const label = labelFor(editor);
 
     const diagnostics = vscode.languages
       .getDiagnostics(document.uri)
@@ -75,6 +84,33 @@ export function captureEditorContext(): CapturedAttachment | null {
     }
 
     return { label, block };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The auto-context fallback used only when the user has pinned no explicit
+ * references: the current selection if there is one, otherwise the whole
+ * open file (from the live editor buffer, so unsaved edits are included) so
+ * there's always situational awareness of what the user is looking at.
+ * Returns null only when no editor has ever been focused this session, or
+ * the underlying document read fails (e.g. a stale reference to a
+ * since-closed tab).
+ */
+export function captureEditorContext(): CapturedAttachment | null {
+  const selection = captureSelection();
+  if (selection) return selection;
+  try {
+    const editor = currentEditor();
+    if (!editor) return null;
+
+    const document = editor.document;
+    const relativePath = vscode.workspace.asRelativePath(document.uri, false);
+    const truncated = document.getText().length > MAX_FILE_BYTES;
+    const text = truncated ? document.getText().slice(0, MAX_FILE_BYTES) : document.getText();
+    const block = `Current file (${relativePath}):\n\`\`\`${document.languageId}\n${text}${truncated ? '\n… (truncated)' : ''}\n\`\`\``;
+    return { label: relativePath, block };
   } catch {
     return null;
   }

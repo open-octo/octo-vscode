@@ -71,6 +71,9 @@ export class ChatState {
   pendingQuestion: PendingQuestion | null = $state(null);
   // Files picked via 'Attach file', queued for the next send.
   pendingAttachments: string[] = $state([]);
+  // The active editor file/selection the host will auto-attach on send,
+  // shown as a live indicator in the composer. null when no editor is focused.
+  activeFile: string | null = $state(null);
 
   // Correlates tool_result/tool_error/tool_stdout back to their tool_call by
   // tool_id — the only reliable pairing, since these events carry no
@@ -93,6 +96,9 @@ export class ChatState {
         break;
       case 'attachments':
         this.pendingAttachments = message.labels;
+        break;
+      case 'activeFile':
+        this.activeFile = message.label;
         break;
       case 'contextAttached': {
         const lastUser = this.lastUserBlock();

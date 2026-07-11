@@ -8,7 +8,9 @@ import { openDiffFromWebview, openEditDiffPreview, openEditDiffResult, openFileA
 import type { OctoEvent } from '../octoClient/octoClient';
 import {
   captureEditorContext,
+  captureSelection,
   combineContext,
+  currentEditorLabel,
   pickWorkspaceFile,
   readFileAttachment,
   type CapturedAttachment,
@@ -96,6 +98,7 @@ export class ChatPanel {
     this.panel.webview.html = this.buildHtml(this.panel.webview, webviewRoot);
 
     const post = (message: unknown) => void this.panel.webview.postMessage(message);
+    const postActiveFile = () => post({ command: 'activeFile', label: currentEditorLabel() });
     this.subscriptions.push(
       controller.onStateChange((state) => post({ command: 'connectionState', state })),
       session.onEvent((event) => {
@@ -104,6 +107,16 @@ export class ChatPanel {
       }),
       session.onHistoryLoaded(({ sessionId, events }) => post({ command: 'history', sessionId, events })),
       this.panel.webview.onDidReceiveMessage((message: InboundMessage) => this.handleMessage(message, post)),
+      // Keep the composer's "current file" indicator in lock-step with what
+      // captureEditorContext() would attach when nothing is pinned.
+      vscode.window.onDidChangeActiveTextEditor(() => postActiveFile()),
+      // Selecting lines in the editor auto-pins them as a removable chip — no
+      // command or shortcut, the selection itself is the gesture. postActiveFile
+      // too so the bottom indicator hides the moment the first chip appears.
+      vscode.window.onDidChangeTextEditorSelection(() => {
+        this.captureSelectionAttachment(post);
+        postActiveFile();
+      }),
     );
     this.panel.onDidDispose(() => {
       for (const sub of this.subscriptions) sub.dispose();
@@ -123,6 +136,7 @@ export class ChatPanel {
       case 'ready':
         post({ command: 'connectionState', state: this.controller.getState() });
         post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
+        post({ command: 'activeFile', label: currentEditorLabel() });
         break;
       case 'send':
         this.send(message.text, post);
@@ -182,10 +196,33 @@ export class ChatPanel {
     }
   }
 
+  // A selection auto-pins itself as a chip; a same-file selection replaces
+  // the file's previous chip rather than stacking (so dragging out a range
+  // updates the line numbers instead of piling up), while a different file's
+  // selection accumulates alongside — that's how cross-file references build
+  // up. Empty selections are ignored: chips are snapshots, so clicking away
+  // (or ×-ing a chip) doesn't make one reappear until the user selects anew.
+  private captureSelectionAttachment(post: (message: unknown) => void): void {
+    const selection = captureSelection();
+    if (!selection) return;
+
+    const filePath = selection.label.split(':')[0];
+    for (const key of [...this.pendingAttachments.keys()]) {
+      if (key === filePath || key.startsWith(`${filePath}:`)) this.pendingAttachments.delete(key);
+    }
+    this.pendingAttachments.set(selection.label, selection);
+    post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
+  }
+
   private send(text: string, post: (message: unknown) => void): void {
     const attachments = [...this.pendingAttachments.values()];
-    const editorContext = captureEditorContext();
-    if (editorContext) attachments.push(editorContext);
+    // Only fall back to auto-capturing the whole current file when the user
+    // has pinned nothing explicit — an explicit selection/file reference means
+    // "use exactly this", not "this plus whatever file happens to be focused".
+    if (!attachments.length) {
+      const editorContext = captureEditorContext();
+      if (editorContext) attachments.push(editorContext);
+    }
 
     this.pendingAttachments.clear();
     post({ command: 'attachments', labels: [] });
