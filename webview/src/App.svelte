@@ -20,14 +20,10 @@
     <div class="banner" class:error={chatState.connectionState === 'failed'}>{connectionLabel}</div>
   {/if}
 
-  <MessageList
-    blocks={chatState.blocks}
-    onOpenFile={(path) => chatState.openFile(path)}
-    onViewDiff={(diff, path) => chatState.viewDiff(diff, path)}
-  />
+  <MessageList blocks={chatState.blocks} onOpenFile={(path) => chatState.openFile(path)} />
 
   {#if chatState.thinking}
-    <div class="status-line thinking">{chatState.thinking}</div>
+    <div class="status-line">Thinking…</div>
   {:else if chatState.status}
     <div class="status-line">{chatState.status}</div>
   {/if}
@@ -90,8 +86,5 @@
   }
   .status-line.error {
     color: var(--vscode-errorForeground);
-  }
-  .status-line.thinking {
-    font-style: italic;
   }
 </style>

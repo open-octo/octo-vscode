@@ -1,27 +1,15 @@
 <script lang="ts">
   import { renderMarkdown, setupCopyButtons } from '../lib/markdown';
-  import type { Block, ToolBlock } from '../lib/chatState.svelte';
-  import type { UIPayload } from '../lib/protocol';
+  import ToolCall from './ToolCall.svelte';
+  import type { Block } from '../lib/chatState.svelte';
 
   let {
     blocks,
     onOpenFile,
-    onViewDiff,
   }: {
     blocks: Block[];
     onOpenFile: (path: string) => void;
-    onViewDiff: (diff: string, path?: string) => void;
   } = $props();
-
-  // Narrowing block.uiPayload?.type === 'edit' inline in the template loses
-  // the narrowing by the time it reaches an onclick closure — pulling it
-  // through a typed function sidesteps that instead of fighting it.
-  function editPayload(block: ToolBlock): Extract<UIPayload, { type: 'edit' }> | undefined {
-    return block.uiPayload?.type === 'edit' ? block.uiPayload : undefined;
-  }
-  function openablePayload(block: ToolBlock): Extract<UIPayload, { type: 'write' | 'file_read' }> | undefined {
-    return block.uiPayload?.type === 'write' || block.uiPayload?.type === 'file_read' ? block.uiPayload : undefined;
-  }
 
   function copyButtons(node: HTMLElement) {
     return setupCopyButtons(node);
@@ -39,44 +27,9 @@
 </script>
 
 <div class="list" bind:this={container}>
-  {#each blocks as block}
+  {#each blocks as block (block)}
     {#if block.kind === 'tool'}
-      {@const edit = editPayload(block)}
-      {@const openable = openablePayload(block)}
-      <div class="tool">
-        <div class="tool-header">
-          <svg class="tool-icon" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M9.5 2.5a2.5 2.5 0 0 0-3.2 3.2L2 10v3.5h3.5L10 9.2a2.5 2.5 0 0 0 3.2-3.2l-1.7 1.7-2-2z" />
-          </svg>
-          <span class="tool-name">{block.name}</span>
-          {#if edit}
-            <button class="tool-action" onclick={() => onViewDiff(edit.diff, edit.path)}>View diff</button>
-          {:else if openable}
-            <button class="tool-action" onclick={() => onOpenFile(openable.path)}>Open</button>
-          {/if}
-          <span class="tool-status">
-            {#if block.error}
-              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" class="status-error" aria-label="Failed">
-                <path d="M4 4l8 8M12 4l-8 8" />
-              </svg>
-            {:else if block.result !== undefined}
-              <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="status-ok" aria-label="Done">
-                <path d="M3.5 8.5l3 3 6-7" />
-              </svg>
-            {:else}
-              <span class="spinner" aria-label="Running"></span>
-            {/if}
-          </span>
-        </div>
-        {#if block.stdout.length}
-          <pre class="tool-body">{block.stdout.join('\n')}</pre>
-        {/if}
-        {#if block.error}
-          <pre class="tool-body error">{block.error}</pre>
-        {:else if block.result}
-          <pre class="tool-body">{block.result}</pre>
-        {/if}
-      </div>
+      <ToolCall {block} {onOpenFile} />
     {:else}
       <div class="bubble" class:user={block.kind === 'user'} class:assistant={block.kind === 'assistant'}>
         {#if block.attachments?.length}
@@ -91,9 +44,6 @@
               </span>
             {/each}
           </div>
-        {/if}
-        {#if block.thinking}
-          <div class="thinking">{block.thinking}</div>
         {/if}
         {#if block.kind === 'assistant'}
           <div class="md-content" use:copyButtons>{@html renderMarkdown(block.text)}</div>
@@ -115,6 +65,11 @@
     gap: 10px;
   }
   .bubble {
+    /* Direct children of the scrollable flex column must not shrink: without
+       this, flexbox collapses them to fit the list's height instead of letting
+       the list scroll. Harmless here (text keeps bubbles tall), but critical
+       for .tool below, which has overflow:hidden and otherwise collapses to 0. */
+    flex-shrink: 0;
     padding: 9px 12px;
     border-radius: 12px;
     white-space: pre-wrap;
@@ -132,14 +87,6 @@
     background: transparent;
     padding: 2px 2px;
   }
-  .thinking {
-    margin-bottom: 6px;
-    padding-left: 8px;
-    border-left: 2px solid var(--vscode-widget-border);
-    color: var(--vscode-descriptionForeground);
-    font-size: 12px;
-    font-style: italic;
-  }
   .attachments {
     display: flex;
     flex-wrap: wrap;
@@ -156,86 +103,6 @@
     color: var(--vscode-badge-foreground);
     font-size: 11px;
     font-family: var(--vscode-editor-font-family);
-  }
-
-  /* ── Tool call card ───────────────────────────────────────────────────── */
-  .tool {
-    border-radius: 10px;
-    overflow: hidden;
-    font-size: 12px;
-    background: var(--vscode-editorWidget-background);
-  }
-  .tool-header {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 6px 10px;
-    color: var(--vscode-descriptionForeground);
-  }
-  .tool-icon {
-    flex-shrink: 0;
-    opacity: 0.85;
-  }
-  .tool-name {
-    margin-right: auto;
-    font-weight: 600;
-    font-family: var(--vscode-editor-font-family);
-    color: var(--vscode-foreground);
-  }
-  .tool-action {
-    flex-shrink: 0;
-    height: 20px;
-    padding: 0 8px;
-    border-radius: 999px;
-    border: none;
-    background: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-    font-size: 11px;
-    cursor: pointer;
-    font-family: inherit;
-  }
-  .tool-action:hover {
-    background: var(--vscode-button-secondaryHoverBackground);
-  }
-  .tool-status {
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    margin-left: 4px;
-  }
-  .status-ok {
-    color: var(--vscode-terminal-ansiGreen, #3fb950);
-  }
-  .status-error {
-    color: var(--vscode-errorForeground);
-  }
-  .spinner {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    border: 1.5px solid var(--vscode-widget-border);
-    border-top-color: var(--vscode-focusBorder);
-    animation: octo-spin 0.8s linear infinite;
-  }
-  @keyframes octo-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-  .tool-body {
-    margin: 0;
-    padding: 2px 10px 8px;
-    font-family: var(--vscode-editor-font-family);
-    font-size: 12px;
-    color: var(--vscode-descriptionForeground);
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 220px;
-    overflow-y: auto;
-  }
-  .tool-body.error {
-    color: var(--vscode-errorForeground);
   }
 
   /* ── Markdown content (assistant replies) ────────────────────────────── */
