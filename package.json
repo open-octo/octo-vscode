@@ -2,7 +2,7 @@
   "name": "octo-agent",
   "displayName": "Octo Agent",
   "description": "octo agent in your editor — connects to a local octo serve",
-  "version": "0.0.5",
+  "version": "0.1.0",
   "publisher": "open-octo",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -114,6 +114,7 @@
   "scripts": {
     "build": "node esbuild.config.mjs && npm run build --prefix webview",
     "dev": "node esbuild.config.mjs --watch",
+    "watch:webview": "npm run watch --prefix webview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && npm run test --prefix webview",
     "vscode:prepublish": "node esbuild.config.mjs --production && npm run build --prefix webview",

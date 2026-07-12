@@ -7,6 +7,30 @@
       "problemMatcher": ["$tsc"],
       "group": "build",
       "label": "npm: build"
+    },
+    {
+      "type": "npm",
+      "script": "dev",
+      "label": "watch: host",
+      "isBackground": true,
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": { "group": "watch", "panel": "dedicated" }
+    },
+    {
+      "type": "npm",
+      "script": "watch:webview",
+      "label": "watch: webview",
+      "isBackground": true,
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": { "group": "watch", "panel": "dedicated" }
+    },
+    {
+      "label": "watch: all",
+      "dependsOn": ["watch: host", "watch: webview"],
+      "dependsOrder": "parallel",
+      "group": "build"
     }
   ]
 }
