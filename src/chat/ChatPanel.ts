@@ -43,6 +43,13 @@ export class ChatPanel {
   // refreshes its content rather than duplicating a chip.
   private readonly pendingAttachments = new Map<string, CapturedAttachment>();
   private readonly subscriptions: vscode.Disposable[] = [];
+  // Label of the editor context auto-attached on the last send. The current
+  // open file rides along as fallback context only when the user pinned
+  // nothing explicit — but re-sending that same file on every subsequent
+  // message is pure duplication (the agent already has it from the first
+  // send), so we skip it while the label is unchanged. Reset on session
+  // switch so a fresh transcript re-establishes "what am I looking at".
+  private lastAutoAttachedLabel: string | null = null;
 
   static async openNew(
     extensionUri: vscode.Uri,
@@ -98,14 +105,20 @@ export class ChatPanel {
     this.panel.webview.html = this.buildHtml(this.panel.webview, webviewRoot);
 
     const post = (message: unknown) => void this.panel.webview.postMessage(message);
-    const postActiveFile = () => post({ command: 'activeFile', label: currentEditorLabel() });
+    const postActiveFile = () => post({ command: 'activeFile', label: this.activeFileLabel() });
     this.subscriptions.push(
       controller.onStateChange((state) => post({ command: 'connectionState', state })),
       session.onEvent((event) => {
         post({ command: 'event', event });
         this.autoOpenDiff(event);
       }),
-      session.onHistoryLoaded(({ sessionId, events }) => post({ command: 'history', sessionId, events })),
+      session.onHistoryLoaded(({ sessionId, events }) => {
+        // New/switched transcript — let the current file auto-attach once more,
+        // and re-show the composer's context indicator that dedupe had hidden.
+        this.lastAutoAttachedLabel = null;
+        post({ command: 'history', sessionId, events });
+        post({ command: 'activeFile', label: this.activeFileLabel() });
+      }),
       this.panel.webview.onDidReceiveMessage((message: InboundMessage) => this.handleMessage(message, post)),
       // Keep the composer's "current file" indicator in lock-step with what
       // captureEditorContext() would attach when nothing is pinned.
@@ -136,7 +149,10 @@ export class ChatPanel {
       case 'ready':
         post({ command: 'connectionState', state: this.controller.getState() });
         post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
-        post({ command: 'activeFile', label: currentEditorLabel() });
+        post({ command: 'activeFile', label: this.activeFileLabel() });
+        // A freshly (re)opened panel starts with an empty webview; replay the
+        // active session's history now that we know it's listening.
+        void this.session.replayCurrentHistory();
         break;
       case 'send':
         this.send(message.text, post);
@@ -214,18 +230,36 @@ export class ChatPanel {
     post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
   }
 
+  // The current file/selection label for the composer's context indicator, or
+  // null to hide it: hidden once that same context has already auto-attached
+  // (it won't ride along again until the user moves to a different file), so
+  // the indicator no longer implies a re-send that won't happen.
+  private activeFileLabel(): string | null {
+    const label = currentEditorLabel();
+    return label === this.lastAutoAttachedLabel ? null : label;
+  }
+
   private send(text: string, post: (message: unknown) => void): void {
     const attachments = [...this.pendingAttachments.values()];
     // Only fall back to auto-capturing the whole current file when the user
     // has pinned nothing explicit — an explicit selection/file reference means
     // "use exactly this", not "this plus whatever file happens to be focused".
+    // And only when it differs from what last auto-attached: re-sending the
+    // same open file on every message just duplicates context the agent
+    // already has (switching to a different file/selection attaches anew).
     if (!attachments.length) {
       const editorContext = captureEditorContext();
-      if (editorContext) attachments.push(editorContext);
+      if (editorContext && editorContext.label !== this.lastAutoAttachedLabel) {
+        attachments.push(editorContext);
+        this.lastAutoAttachedLabel = editorContext.label;
+      }
     }
 
     this.pendingAttachments.clear();
     post({ command: 'attachments', labels: [] });
+    // Hide the composer's "In <file>" indicator now that this file has ridden
+    // along — activeFileLabel() returns null once it matches lastAutoAttachedLabel.
+    post({ command: 'activeFile', label: this.activeFileLabel() });
     if (attachments.length) {
       post({ command: 'contextAttached', labels: attachments.map((a) => a.label) });
     }

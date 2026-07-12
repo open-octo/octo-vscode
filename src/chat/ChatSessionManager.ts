@@ -89,6 +89,27 @@ export class ChatSessionManager {
     }
   }
 
+  /** Re-sends the active session's history to a freshly (re)opened panel.
+   * openSession skips switchToSession when the clicked session is already
+   * the active one, and closing the panel disposes the webview — so the new
+   * webview boots empty and would stay blank without a replay. The webview's
+   * 'ready' handshake is the only moment it's guaranteed to be listening
+   * (switchToSession/restoreLastSession may fire history before the webview
+   * subscribes, and that post is lost). Best-effort: a connection failure is
+   * already surfaced elsewhere, so a blank transcript is the graceful floor. */
+  async replayCurrentHistory(): Promise<void> {
+    if (!this.sessionId) return;
+    try {
+      await this.controller.ready();
+      const events = await this.controller.getSessionMessages(this.sessionId);
+      // sessionId can change out from under the awaits (a concurrent switch);
+      // only fire if we're still on the session we fetched for.
+      if (this.sessionId) this.historyEmitter.fire({ sessionId: this.sessionId, events });
+    } catch {
+      // swallow — see doc comment
+    }
+  }
+
   async sendMessage(text: string, files?: OctoUserFile[]): Promise<void> {
     const sessionId = await this.ensureSession();
     this.controller.sendUserMessage(sessionId, text, files);
