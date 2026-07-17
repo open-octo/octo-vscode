@@ -1,8 +1,10 @@
 name: Release
 
-# Push a v* tag (e.g. v0.0.6) to build the extension and attach the packaged
-# .vsix to a GitHub Release. No Marketplace publish — install the .vsix by hand
-# (code --install-extension octo-agent-<version>.vsix).
+# Push a v* tag (e.g. v0.0.6) to build the extension, attach the packaged
+# .vsix to a GitHub Release, and — when a VSCE_PAT secret is configured —
+# publish it to the VS Code Marketplace so installed copies auto-update.
+# Without the secret the publish step is skipped and the .vsix is still
+# available to install by hand (code --install-extension octo-agent-<version>.vsix).
 on:
   push:
     tags:
@@ -14,6 +16,10 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Job-level so the publish step's `if` can read it — a step-level env is
+    # not reliably in scope for that same step's own `if` expression.
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
     steps:
       - uses: actions/checkout@v7
 
@@ -40,3 +46,11 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           files: '*.vsix'
+
+      # Publish the exact .vsix we just packaged (no rebuild) to the
+      # Marketplace. Guarded on the secret so the release still succeeds
+      # before the publisher/token are set up — the step just no-ops.
+      # vsce reads the token from the VSCE_PAT env var (set at job level).
+      - name: Publish to VS Code Marketplace
+        if: ${{ env.VSCE_PAT != '' }}
+        run: npx @vscode/vsce publish --packagePath *.vsix
