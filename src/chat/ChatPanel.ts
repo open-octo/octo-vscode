@@ -176,10 +176,10 @@ export class ChatPanel {
         post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
         break;
       case 'openFile':
-        void openFileAtPath(message.path);
+        void openFileAtPath(message.path, this.diffColumn());
         break;
       case 'viewDiff':
-        void openDiffFromWebview(message.diff, message.path);
+        void openDiffFromWebview(message.diff, message.path, this.diffColumn());
         break;
     }
   }
@@ -202,14 +202,30 @@ export class ChatPanel {
    * see what they're approving, not just the modal's plain-text preview),
    * and a just-applied edit_file result. Both use preview:true/
    * preserveFocus:true so successive edits reuse one tab rather than
-   * piling up new ones and never steal focus from the chat panel.
+   * piling up new ones and never steal focus from the chat panel, and are
+   * routed to diffColumn() so they open in the editor area rather than on
+   * top of the chat panel's own group (which would hide the chat behind
+   * the diff tab).
    */
   private autoOpenDiff(event: OctoEvent): void {
     if (event.type === 'request_confirmation' && event.diff) {
-      void openEditDiffPreview(event.diff, event.tool_name ?? 'pending edit');
+      void openEditDiffPreview(event.diff, event.tool_name ?? 'pending edit', this.diffColumn());
     } else if (event.type === 'tool_result' && event.ui_payload?.type === 'edit') {
-      void openEditDiffResult(event.ui_payload.diff, event.ui_payload.path);
+      void openEditDiffResult(event.ui_payload.diff, event.ui_payload.path, this.diffColumn());
     }
+  }
+
+  // The editor group diffs and opened files should land in — always one
+  // other than the chat panel's own, so opening a diff never buries the
+  // chat behind it. The chat opens Beside (normally column Two), so edits
+  // go to the main group (column One); if the chat itself ended up in
+  // column One (opened with no editor showing), push them to column Two.
+  // A hidden panel reports viewColumn undefined — treat that as "not
+  // column One" and default to the main group.
+  private diffColumn(): vscode.ViewColumn {
+    return this.panel.viewColumn === vscode.ViewColumn.One
+      ? vscode.ViewColumn.Two
+      : vscode.ViewColumn.One;
   }
 
   // A selection auto-pins itself as a chip; a same-file selection replaces

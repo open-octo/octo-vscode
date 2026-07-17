@@ -59,7 +59,11 @@ export function parseEditDiffBlock(diff: string): EditDiffLines {
 }
 
 /** Pre-execution: neither side is a real file yet, so both are virtual. */
-export async function openEditDiffPreview(diff: string, label: string): Promise<void> {
+export async function openEditDiffPreview(
+  diff: string,
+  label: string,
+  viewColumn: vscode.ViewColumn,
+): Promise<void> {
   if (!provider) return;
   const { before, after } = parseEditDiffBlock(diff);
   const id = counter++;
@@ -68,6 +72,7 @@ export async function openEditDiffPreview(diff: string, label: string): Promise<
   provider.set(beforeUri, before);
   provider.set(afterUri, after);
   await vscode.commands.executeCommand('vscode.diff', beforeUri, afterUri, `${label} (proposed edit)`, {
+    viewColumn,
     preview: true,
     preserveFocus: true,
   });
@@ -78,7 +83,11 @@ export async function openEditDiffPreview(diff: string, label: string): Promise<
  * the real file (live, syntax-highlighted, editable) rather than a frozen
  * virtual snapshot — only "before" needs reconstructing from the diff text.
  */
-export async function openEditDiffResult(diff: string, absPath: string): Promise<void> {
+export async function openEditDiffResult(
+  diff: string,
+  absPath: string,
+  viewColumn: vscode.ViewColumn,
+): Promise<void> {
   if (!provider) return;
   const { before } = parseEditDiffBlock(diff);
   const id = counter++;
@@ -86,6 +95,7 @@ export async function openEditDiffResult(diff: string, absPath: string): Promise
   const beforeUri = virtualUri(id, 'before', label);
   provider.set(beforeUri, before);
   await vscode.commands.executeCommand('vscode.diff', beforeUri, vscode.Uri.file(absPath), `${label} (applied edit)`, {
+    viewColumn,
     preview: true,
     preserveFocus: true,
   });
@@ -106,14 +116,18 @@ function resolveToolPath(toolPath: string): vscode.Uri {
   return root ? vscode.Uri.joinPath(root.uri, toolPath) : vscode.Uri.file(toolPath);
 }
 
-export async function openFileAtPath(path: string): Promise<void> {
-  await vscode.window.showTextDocument(resolveToolPath(path), { preview: true, preserveFocus: false });
+export async function openFileAtPath(path: string, viewColumn: vscode.ViewColumn): Promise<void> {
+  await vscode.window.showTextDocument(resolveToolPath(path), { viewColumn, preview: true, preserveFocus: false });
 }
 
-export async function openDiffFromWebview(diff: string, path: string | undefined): Promise<void> {
+export async function openDiffFromWebview(
+  diff: string,
+  path: string | undefined,
+  viewColumn: vscode.ViewColumn,
+): Promise<void> {
   if (path) {
-    await openEditDiffResult(diff, path);
+    await openEditDiffResult(diff, path, viewColumn);
   } else {
-    await openEditDiffPreview(diff, 'pending edit');
+    await openEditDiffPreview(diff, 'pending edit', viewColumn);
   }
 }
