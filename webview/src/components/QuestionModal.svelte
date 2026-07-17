@@ -32,7 +32,10 @@
 
   function submit(): void {
     if (!pending || (selected.length === 0 && !custom.trim())) return;
-    onAnswer(selected, custom, false);
+    // Spread to a plain array: `selected` is a Svelte $state proxy, and the
+    // host bridge posts this via postMessage (structured clone), which throws
+    // DataCloneError on a reactive proxy. cancel()'s [] literal never hit this.
+    onAnswer([...selected], custom, false);
   }
 
   function cancel(): void {
