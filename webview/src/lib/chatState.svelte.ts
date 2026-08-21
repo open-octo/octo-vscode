@@ -1,4 +1,5 @@
 import { postToHost } from './vscodeApi';
+import type { AskAnswerPayload, AskOutcome } from './askStepper';
 import type { ConnectionState, InboundHostMessage, OctoEvent, UIPayload } from './protocol';
 
 export type ToolBlock = {
@@ -176,14 +177,16 @@ export class ChatState {
     postToHost({ command: 'confirm', id, result });
   }
 
-  answerQuestion(choices: string[], custom: string, cancelled: boolean): void {
+  answerQuestion(outcome: AskOutcome, answers: AskAnswerPayload[]): void {
     if (!this.pendingQuestion) return;
     postToHost({
       command: 'answerQuestion',
       questionId: this.pendingQuestion.question_id,
-      choices,
-      custom,
-      cancelled,
+      outcome,
+      // Rebuild out of the $state proxies: postMessage structured-clones its
+      // payload and throws DataCloneError on a reactive proxy — the same trap
+      // 85355b6 fixed for the old flat `choices` array.
+      answers: answers.map((a) => ({ choices: [...a.choices], custom: a.custom, notes: a.notes })),
     });
     this.pendingQuestion = null;
   }

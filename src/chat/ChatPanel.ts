@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import { ChatSessionManager } from './ChatSessionManager';
 import { ConnectionController } from '../connection/ConnectionController';
 import { openDiffFromWebview, openEditDiffPreview, openEditDiffResult, openFileAtPath } from '../context/diffView';
-import type { OctoEvent } from '../octoClient/octoClient';
+import type { AskAnswer, AskOutcome, OctoEvent } from '../octoClient/octoClient';
 import {
   captureEditorContext,
   captureSelection,
@@ -22,7 +22,8 @@ type InboundMessage =
   | { command: 'send'; text: string }
   | { command: 'interrupt' }
   | { command: 'confirm'; id: string; result: string }
-  | { command: 'answerQuestion'; questionId: string; choices: string[]; custom: string; cancelled: boolean }
+  // One message per question SET: the picker submits all answers at once.
+  | { command: 'answerQuestion'; questionId: string; outcome: AskOutcome; answers: AskAnswer[] }
   | { command: 'pickFile' }
   | { command: 'removeAttachment'; label: string }
   | { command: 'openFile'; path: string }
@@ -165,7 +166,7 @@ export class ChatPanel {
         break;
       case 'answerQuestion':
         this.guard(post, () =>
-          this.session.answerUserQuestion(message.questionId, message.choices, message.custom, message.cancelled),
+          this.session.answerUserQuestion(message.questionId, message.outcome, message.answers),
         );
         break;
       case 'pickFile':

@@ -49,7 +49,7 @@
 />
 <QuestionModal
   pending={chatState.pendingQuestion}
-  onAnswer={(choices, custom, cancelled) => chatState.answerQuestion(choices, custom, cancelled)}
+  onAnswer={(outcome, answers) => chatState.answerQuestion(outcome, answers)}
 />
 
 <style>

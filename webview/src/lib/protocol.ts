@@ -3,6 +3,8 @@
 // than imported: that file pulls in `ws`, a Node-only module that can't
 // land in this browser bundle. Keep the two in sync by hand.
 
+import type { AskAnswerPayload, AskOutcome, AskQuestion } from './askStepper';
+
 // ui_payload shapes — see octoClient.ts's UIPayload doc comment for why
 // these come from the tools' `ui := map[string]any{...}` literals rather
 // than ws_types.go's named structs.
@@ -50,13 +52,13 @@ export type OctoEvent =
   // this confirmation — close it here too instead of leaving a stale modal
   // that would double-answer if the user then clicked it.
   | { type: 'confirmation_complete'; id: string; result: string }
+  // 1-4 questions per call, each with its own options; the picker walks them
+  // as tabs. The server no longer sends a flat single-question shape.
   | {
       type: 'request_user_question';
       question_id: string;
-      question: string;
-      options: string[];
-      multi_select: boolean;
-      header?: string;
+      questions: AskQuestion[];
+      secret?: boolean;
     }
   | { type: 'dismiss_user_question'; question_id: string }
   | { type: 'session_deleted'; session_id: string }
@@ -91,7 +93,10 @@ export type OutboundHostMessage =
   | { command: 'send'; text: string }
   | { command: 'interrupt' }
   | { command: 'confirm'; id: string; result: string }
-  | { command: 'answerQuestion'; questionId: string; choices: string[]; custom: string; cancelled: boolean }
+  // One message closes the whole question set: the picker accumulates
+  // per-question drafts locally and posts once. `outcome` is 'submitted',
+  // 'clarify' ("Chat about this") or 'rejected'.
+  | { command: 'answerQuestion'; questionId: string; outcome: AskOutcome; answers: AskAnswerPayload[] }
   | { command: 'pickFile' }
   | { command: 'removeAttachment'; label: string }
   | { command: 'openFile'; path: string }
