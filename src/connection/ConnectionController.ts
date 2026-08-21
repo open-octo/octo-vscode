@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-import { OctoClient, OctoEvent, OctoSession, OctoUserFile } from '../octoClient/octoClient';
+import { AskAnswer, AskOutcome, OctoClient, OctoEvent, OctoSession, OctoUserFile } from '../octoClient/octoClient';
 import { ensureServerRunning } from '../octoClient/serverLauncher';
 
 export interface OctoConfig {
@@ -165,8 +165,8 @@ export class ConnectionController {
     this.requireClient().confirm(id, result);
   }
 
-  answerUserQuestion(questionId: string, choices: string[], custom: string, cancelled: boolean): void {
-    this.requireClient().answerUserQuestion(questionId, choices, custom, cancelled);
+  answerUserQuestion(questionId: string, outcome: AskOutcome, answers: AskAnswer[]): void {
+    this.requireClient().answerUserQuestion(questionId, outcome, answers);
   }
 
   dispose(): void {

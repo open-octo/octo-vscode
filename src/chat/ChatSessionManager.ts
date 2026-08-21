@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { ConnectionController } from '../connection/ConnectionController';
-import { OctoEvent, OctoSession, OctoUserFile } from '../octoClient/octoClient';
+import { AskAnswer, AskOutcome, OctoEvent, OctoSession, OctoUserFile } from '../octoClient/octoClient';
 
 export interface HistoryLoaded {
   sessionId: string;
@@ -123,8 +123,8 @@ export class ChatSessionManager {
     this.controller.confirm(id, result);
   }
 
-  answerUserQuestion(questionId: string, choices: string[], custom: string, cancelled: boolean): void {
-    this.controller.answerUserQuestion(questionId, choices, custom, cancelled);
+  answerUserQuestion(questionId: string, outcome: AskOutcome, answers: AskAnswer[]): void {
+    this.controller.answerUserQuestion(questionId, outcome, answers);
   }
 
   /** If this is the session currently open in the panel, the local reset

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { ChatState, type ToolBlock } from './chatState.svelte';
 import type { OctoEvent } from './protocol';
@@ -182,5 +182,69 @@ describe('ChatState history replay', () => {
     expect(state.status).toBeNull();
     expect(state.pendingConfirmation).toBeNull();
     expect(state.blocks).toEqual([]);
+  });
+});
+
+describe('ChatState question answers', () => {
+  // vscodeApi caches the host handle on first use, so the recorder has to be
+  // installed once and drained between cases rather than re-stubbed.
+  const posted: unknown[] = [];
+  (globalThis as unknown as { acquireVsCodeApi: () => unknown }).acquireVsCodeApi = () => ({
+    postMessage: (m: unknown) => posted.push(m),
+  });
+
+  beforeEach(() => {
+    posted.length = 0;
+  });
+
+  // The host bridge structured-clones this payload, which throws
+  // DataCloneError on a Svelte $state proxy (fixed once in 85355b6 for the
+  // old flat `choices` array — the same trap applies per answer now).
+  it('posts one frame per question set, with plain arrays', () => {
+    const state = new ChatState();
+    fireEvent(state, {
+      type: 'request_user_question',
+      question_id: 'q_1',
+      questions: [
+        { question: 'Which one?', header: 'pick', options: [{ label: 'A' }, { label: 'B' }] },
+        { question: 'And?', header: 'then', options: [{ label: 'C' }, { label: 'D' }] },
+      ],
+    });
+    expect(state.pendingQuestion?.question_id).toBe('q_1');
+
+    state.answerQuestion('submitted', [
+      { choices: ['A'], custom: '', notes: 'hm' },
+      { choices: [], custom: 'neither', notes: '' },
+    ]);
+
+    expect(posted).toEqual([
+      {
+        command: 'answerQuestion',
+        questionId: 'q_1',
+        outcome: 'submitted',
+        answers: [
+          { choices: ['A'], custom: '', notes: 'hm' },
+          { choices: [], custom: 'neither', notes: '' },
+        ],
+      },
+    ]);
+    // Answering clears the pending question, so a second submit is a no-op.
+    expect(state.pendingQuestion).toBeNull();
+    state.answerQuestion('submitted', []);
+    expect(posted).toHaveLength(1);
+  });
+
+  it('sends no answers when the picker is dismissed', () => {
+    const state = new ChatState();
+    fireEvent(state, {
+      type: 'request_user_question',
+      question_id: 'q_2',
+      questions: [{ question: 'Which one?', header: 'pick', options: [{ label: 'A' }, { label: 'B' }] }],
+    });
+    state.answerQuestion('rejected', []);
+
+    expect(posted).toEqual([
+      { command: 'answerQuestion', questionId: 'q_2', outcome: 'rejected', answers: [] },
+    ]);
   });
 });

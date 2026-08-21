@@ -28,6 +28,31 @@ export interface OctoUserFile {
 // write_file.go, read_file.go, terminal.go, tasks.go's respective
 // `ui := map[string]any{...}` literals, the actual (and only) source of
 // truth for the field names.
+/** One choice of an ask_user_question question. */
+export interface AskOption {
+  label: string;
+  description?: string;
+  preview?: string;
+}
+
+/** One question of an ask_user_question set. */
+export interface AskQuestion {
+  question: string;
+  header: string;
+  multi_select?: boolean;
+  options?: AskOption[];
+}
+
+/** How the user left the picker. */
+export type AskOutcome = 'submitted' | 'clarify' | 'rejected';
+
+/** One question's answer on the wire. */
+export interface AskAnswer {
+  choices: string[];
+  custom: string;
+  notes: string;
+}
+
 export type UIPayload =
   | { type: 'edit'; path: string; occurrences: number; diff: string }
   | { type: 'write'; path: string; size_bytes: number; line_count: number; preview: string; preview_truncated: boolean }
@@ -94,7 +119,10 @@ export type OctoEvent =
   // this confirmation — close it here too instead of leaving a stale modal
   // that would double-answer if the user then clicked it.
   | { type: 'confirmation_complete'; id: string; result: string }
-  | { type: 'request_user_question'; question_id: string; question: string; options: string[]; multi_select: boolean; header?: string }
+  // 1-4 questions per call; the picker walks them as tabs. Options keep
+  // label/description/preview apart so the client can render the label
+  // prominently and switch to the two-column preview layout.
+  | { type: 'request_user_question'; question_id: string; questions: AskQuestion[]; secret?: boolean }
   | { type: 'dismiss_user_question'; question_id: string }
   | { type: 'session_deleted'; session_id: string }
   // Global broadcast (session_id in the payload, but sent to every client,
@@ -191,8 +219,15 @@ export class OctoClient {
     this.send({ type: 'confirmation', id, result });
   }
 
-  answerUserQuestion(questionId: string, choices: string[], custom: string, cancelled: boolean): void {
-    this.send({ type: 'user_question_answer', question_id: questionId, choices, custom, cancelled });
+  /**
+   * Close a whole ask_user_question set in one frame. `outcome` is
+   * 'submitted' (answers stand), 'clarify' (the user wants to talk it over
+   * instead) or 'rejected' (dismissed — the server discards the answers).
+   * Answers carry no preview: the server copies the chosen option's preview
+   * out of the request it still holds.
+   */
+  answerUserQuestion(questionId: string, outcome: AskOutcome, answers: AskAnswer[]): void {
+    this.send({ type: 'user_question_answer', question_id: questionId, outcome, answers });
   }
 
   async createSession(opts: { name?: string; workingDir?: string } = {}): Promise<OctoSession> {
