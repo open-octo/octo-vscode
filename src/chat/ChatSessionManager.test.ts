@@ -338,3 +338,22 @@ describe('ChatSessionManager project binding', () => {
     expect(controller.createSessionGroup).not.toHaveBeenCalled();
   });
 });
+
+describe('session naming', () => {
+  it('treats octo’s own untitled placeholders as no name at all', async () => {
+    // agent.IsAutoNamePlaceholder: empty, "*Octo Agent" (stamped on a session
+    // with no turns), or the web frontend's "Session N". Printed verbatim,
+    // these put "*Octo Agent" in the chat header until the first turn ends.
+    const { controller } = fakeController();
+    controller.listSessions = vi.fn(async () => [
+      { id: 'a', name: '*Octo Agent' },
+      { id: 'b', name: 'Session 3' },
+      { id: 'c', name: 'Fix the flaky test' },
+    ]);
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await expect(manager.sessionName('a')).resolves.toBe('');
+    await expect(manager.sessionName('b')).resolves.toBe('');
+    await expect(manager.sessionName('c')).resolves.toBe('Fix the flaky test');
+  });
+});

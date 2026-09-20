@@ -88,19 +88,35 @@
           "title": "octo",
           "icon": "resources/icon.svg"
         }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "octo-chat",
+          "title": "octo",
+          "icon": "resources/icon.svg",
+          "when": "!octo.noSecondarySidebar"
+        }
       ]
     },
     "views": {
       "octo": [
         {
           "id": "octo.sessionsView",
-          "name": "Sessions",
-          "visibility": "collapsed"
+          "name": "Sessions"
         },
         {
-          "id": "octo.chatView",
+          "id": "octo.chatViewSidebar",
+          "type": "webview",
           "name": "Chat",
-          "type": "webview"
+          "when": "octo.noSecondarySidebar"
+        }
+      ],
+      "octo-chat": [
+        {
+          "id": "octo.chatView",
+          "type": "webview",
+          "name": "Chat",
+          "when": "!octo.noSecondarySidebar"
         }
       ]
     },
@@ -125,6 +141,11 @@
         {
           "command": "octo.newSession",
           "when": "view == octo.chatView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "octo.newSession",
+          "when": "view == octo.chatViewSidebar",
           "group": "navigation@1"
         }
       ],

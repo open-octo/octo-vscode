@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
 import { ChatSessionManager } from './ChatSessionManager';
-import { OctoSession } from '../octoClient/octoClient';
+import { isPlaceholderName, OctoSession } from '../octoClient/octoClient';
 
 /** "3m", "2h", "5d" — a width-stable age, in the space a tree item's
  * description actually has. Empty when the server sent no timestamp. */
@@ -29,15 +29,23 @@ function icon(session: OctoSession, isCurrent: boolean): vscode.ThemeIcon {
   return new vscode.ThemeIcon(isCurrent ? 'circle-filled' : 'circle-outline');
 }
 
+/** What to call a session in the UI. octo stamps an untitled session with
+ * "*Octo Agent" and only replaces it with a real auto-title after the first
+ * turn — printing that placeholder verbatim is just leaking server internals
+ * at the user. */
+export function sessionLabel(session: OctoSession): string {
+  return isPlaceholderName(session.name) ? 'New session' : session.name;
+}
+
 export class SessionTreeItem extends vscode.TreeItem {
   constructor(readonly session: OctoSession, isCurrent: boolean) {
-    super(session.name || 'Untitled', vscode.TreeItemCollapsibleState.None);
+    super(sessionLabel(session), vscode.TreeItemCollapsibleState.None);
     const waiting = session.pendingQuestion || session.pendingConfirmation;
     this.description = [waiting ? 'waiting for you' : '', age(session)].filter(Boolean).join(' · ');
     this.iconPath = icon(session, isCurrent);
     this.tooltip = new vscode.MarkdownString(
       [
-        `**${session.name || 'Untitled'}**`,
+        `**${sessionLabel(session)}**`,
         session.status ? `Status: ${session.status}` : '',
         typeof session.contextUsage === 'number' ? `Context: ${session.contextUsage}%` : '',
         session.updatedAt ? `Updated: ${new Date(session.updatedAt).toLocaleString()}` : '',

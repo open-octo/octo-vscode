@@ -6,6 +6,7 @@ import { ConnectionController } from '../connection/ConnectionController';
 import {
   AskAnswer,
   AskOutcome,
+  isPlaceholderName,
   OctoEvent,
   OctoSession,
   OctoSessionGroup,
@@ -135,6 +136,11 @@ export class ChatSessionManager {
       await this.controller.ready();
       const fetchedFor = this.sessionId;
       const events = await this.controller.getSessionMessages(fetchedFor);
+      // Re-subscribe: the server seeds a session's context usage, permission
+      // mode and working dir ONLY in response to a subscribe (sendContextUsage
+      // off ws_hub's handler), so a webview VS Code rebuilt after that point
+      // would have an empty header until the next turn ended.
+      this.controller.subscribe(fetchedFor);
       // sessionId can change out from under the awaits (a concurrent switch);
       // only fire if we're still on the session we fetched for. Comparing
       // against the id captured before the fetch, not merely "is there one":
@@ -202,14 +208,16 @@ export class ChatSessionManager {
     return all.filter((s) => members.has(s.id)).sort(byRecency);
   }
 
-  /** The session's sidebar title, for the chat header. Empty when the server
-   * hasn't auto-titled it yet (which the header renders as "New session") or
-   * when the lookup fails — a header is never worth failing a switch over. */
+  /** The session's title for the chat header. Empty when the server hasn't
+   * auto-titled it yet — octo's own "*Octo Agent" placeholder counts as
+   * untitled — or when the lookup fails; the header renders empty as "New
+   * session", and a header is never worth failing a switch over. */
   async sessionName(sessionId: string): Promise<string> {
     try {
       await this.controller.ready();
       const all = await this.controller.listSessions();
-      return all.find((s) => s.id === sessionId)?.name ?? '';
+      const name = all.find((s) => s.id === sessionId)?.name ?? '';
+      return isPlaceholderName(name) ? '' : name;
     } catch {
       return '';
     }

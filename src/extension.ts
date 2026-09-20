@@ -1,7 +1,12 @@
 import * as vscode from 'vscode';
 
 import { ChatSessionManager } from './chat/ChatSessionManager';
-import { ChatViewProvider } from './chat/ChatViewProvider';
+import {
+  CHAT_FALLBACK_VIEW_ID,
+  CHAT_VIEW_ID,
+  ChatViewProvider,
+  supportsSecondarySidebar,
+} from './chat/ChatViewProvider';
 import { SessionListProvider, SessionTreeItem } from './chat/SessionListProvider';
 import { ConnectionController } from './connection/ConnectionController';
 import { registerDiffContentProvider } from './context/diffView';
@@ -26,6 +31,13 @@ function renderStatusBar(item: vscode.StatusBarItem, controller: ConnectionContr
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  // Drives the `when` clauses that pick between the Secondary Side Bar view
+  // and the Activity Bar fallback (see ChatViewProvider). Set before anything
+  // else: it decides which of the two views VS Code is allowed to build.
+  if (!supportsSecondarySidebar()) {
+    void vscode.commands.executeCommand('setContext', 'octo.noSecondarySidebar', true);
+  }
+
   registerDiffContentProvider(context);
   trackActiveEditor(context);
 
@@ -45,17 +57,22 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(sessionList);
   context.subscriptions.push(vscode.window.registerTreeDataProvider('octo.sessionsView', sessionList));
 
-  // The chat itself: a view in the same Activity Bar container, below the
-  // session list. retainContextWhenHidden keeps the transcript and the
-  // composer's draft alive while the user is off in another view — VS Code
-  // otherwise rebuilds a long-hidden webview from scratch.
+  // The chat itself, in the Secondary Side Bar — or, on a host without one,
+  // under the Activity Bar container beneath the session list. Both ids are
+  // registered because only the host knows which view it will build; the
+  // `when` clauses guarantee it builds exactly one.
+  // retainContextWhenHidden keeps the transcript and the composer's draft
+  // alive while the user is off in another view — VS Code otherwise rebuilds
+  // a long-hidden webview from scratch.
   const chatView = new ChatViewProvider(context.extensionUri, controller, session);
   context.subscriptions.push(chatView);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatView, {
-      webviewOptions: { retainContextWhenHidden: true },
-    }),
-  );
+  for (const viewId of [CHAT_VIEW_ID, CHAT_FALLBACK_VIEW_ID]) {
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(viewId, chatView, {
+        webviewOptions: { retainContextWhenHidden: true },
+      }),
+    );
+  }
   // The list's "current" marker and its contents both depend on state this
   // extension only learns asynchronously (session creation, history-driven
   // switches, the startup restore below) — refresh on every event/history

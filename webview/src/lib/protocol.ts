@@ -108,7 +108,13 @@ export type InboundHostMessage =
   | { command: 'sessionInfo'; sessionId: string | null; name: string }
   // Installed skills for the composer's "/" menu, fetched by the host once
   // the connection is up (GET /api/skills).
-  | { command: 'skills'; skills: { name: string; description: string }[] };
+  | { command: 'skills'; skills: { name: string; description: string }[] }
+  // The folder open in VS Code, which is what the chat is actually bound to
+  // (it is mounted into the session's octo project). Comes from the host
+  // because the server has nothing to say about a session until its first
+  // turn: sendContextUsage returns early at 0%, so a new session gets no
+  // session_update at all.
+  | { command: 'hostInfo'; workspace: string | null; workspaceRoot: string | null };
 
 /** An image pasted into the composer, forwarded to the server as an inline
  * attachment (ws_types.go's wsUserFile.data_url). */

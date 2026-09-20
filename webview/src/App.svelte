@@ -25,7 +25,11 @@
     <div class="banner" class:error={chatState.connectionState === 'failed'}>{connectionLabel}</div>
   {/if}
 
-  <MessageList blocks={chatState.blocks} onOpenFile={(path) => chatState.openFile(path)} />
+  <MessageList
+    blocks={chatState.blocks}
+    workspace={chatState.session.workspace}
+    onOpenFile={(path) => chatState.openFile(path)}
+  />
 
   {#if chatState.thinking}
     <!-- The round currently streaming: shown live, then handed to the

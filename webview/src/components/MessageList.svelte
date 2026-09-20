@@ -1,14 +1,18 @@
 <script lang="ts">
   import { renderMarkdown, setupCopyButtons } from '../lib/markdown';
+  import EmptyState from './EmptyState.svelte';
   import ThinkingBlock from './ThinkingBlock.svelte';
   import ToolCall from './ToolCall.svelte';
   import type { Block } from '../lib/chatState.svelte';
 
   let {
     blocks,
+    workspace,
     onOpenFile,
   }: {
     blocks: Block[];
+    /** For the empty state — the folder this session can see. */
+    workspace: string | null;
     onOpenFile: (path: string) => void;
   } = $props();
 
@@ -27,7 +31,10 @@
   });
 </script>
 
-<div class="list" bind:this={container}>
+<div class="list" class:empty={!blocks.length} bind:this={container}>
+  {#if !blocks.length}
+    <EmptyState {workspace} />
+  {/if}
   {#each blocks as block (block)}
     {#if block.kind === 'tool'}
       <ToolCall {block} {onOpenFile} />
@@ -67,6 +74,10 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  /* Centers the empty state in the panel instead of pinning it to the top. */
+  .list.empty {
+    justify-content: center;
   }
   .bubble {
     /* Direct children of the scrollable flex column must not shrink: without

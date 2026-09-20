@@ -21,6 +21,7 @@ class FakeEventEmitter<T> {
 // diffView's pure helpers). Extend as more host-side tests need more of it.
 vi.mock('vscode', () => ({
   EventEmitter: FakeEventEmitter,
+  version: '1.138.0',
   // Mutable by tests: a workspace folder is what turns on the project-binding
   // path in ChatSessionManager.
   workspace: {

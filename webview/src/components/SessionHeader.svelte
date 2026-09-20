@@ -14,7 +14,6 @@
   };
 
   const usage = $derived(session.contextUsage ?? 0);
-  const dir = $derived(session.workingDir ? session.workingDir.split(/[/\\]/).filter(Boolean).at(-1) : null);
 </script>
 
 <div class="head">
@@ -32,10 +31,15 @@
         {usage}%
       </span>
     {/if}
-    {#if dir}
-      <!-- The project's own generated workspace, not the folder open in VS
-           Code — that one is mounted into it as a source folder. -->
-      <span class="chip dir" title={session.workingDir}>{dir}</span>
+    {#if session.workspace}
+      <!-- The folder open in VS Code. The session's own working_dir is octo's
+           generated project workspace, which this folder is mounted into —
+           that one is only interesting when something goes wrong, so it stays
+           in the tooltip. -->
+      <span
+        class="chip dir"
+        title={session.workingDir ? `Mounted into ${session.workingDir}` : 'Mounted into this session\u2019s octo project'}
+      >{session.workspace}</span>
     {/if}
   </span>
 </div>

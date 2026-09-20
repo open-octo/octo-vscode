@@ -10,6 +10,9 @@ export type Todo = { content: string; status: string };
  * server's session_update except the name, which the host supplies. */
 export type SessionInfo = {
   name: string;
+  /** The folder open in VS Code — the one mounted into this session's octo
+   * project. Known to the host from the start, unlike everything below. */
+  workspace: string | null;
   /** 0-100. */
   contextUsage: number | null;
   permissionMode: string | null;
@@ -46,20 +49,50 @@ export type TextBlock = {
 
 export type Block = TextBlock | ToolBlock;
 
-// Mirrors src/context/editorContext.ts's combineContext(): attachment
-// blocks (full file/selection content, for the agent) joined by this
-// separator, then the user's actual typed text. Splitting it back apart is
-// display-only — what already got sent to the agent is unaffected — so a
-// user message that happens to contain this exact separator literally is a
-// rare, harmless mis-split, not a correctness bug.
-const CONTEXT_SEPARATOR = '\n\n---\n\n';
+// Mirrors src/context/editorContext.ts's combineContext(): the typed text,
+// then the editor context in XML blocks after it. Splitting it back apart is
+// display-only — what already went to the agent is unaffected — so a message
+// that happens to contain one of these tags literally is a rare, harmless
+// mis-split, not a correctness bug.
+const CONTEXT_START = /\n\n<(?:current_file|context_files|editor_selection)[\s>]/;
 
-function splitContextFromMessage(content: string): { text: string; attachments: string[] } {
-  const idx = content.lastIndexOf(CONTEXT_SEPARATOR);
+// The pre-path format: whole files pasted in as fenced blocks ahead of the
+// text, separated by "---". Sessions from before that changed still replay
+// through here, and without it their transcripts come back as walls of code.
+const LEGACY_SEPARATOR = '\n\n---\n\n';
+
+function splitContextFromMessage(content: string, workspaceRoot: string | null): { text: string; attachments: string[] } {
+  // Paths in the prompt are absolute (the agent needs them that way); the
+  // transcript shows them the way the composer's chips did.
+  const display = (path: string): string => {
+    const trimmed = path.trim();
+    if (!workspaceRoot) return trimmed;
+    return trimmed.startsWith(`${workspaceRoot}/`) ? trimmed.slice(workspaceRoot.length + 1) : trimmed;
+  };
+
+  const match = content.match(CONTEXT_START);
+  if (match?.index !== undefined) {
+    const text = content.slice(0, match.index).trim();
+    const blob = content.slice(match.index);
+    const attachments: string[] = [];
+    for (const m of blob.matchAll(/<current_file>\n([^\n]+)\n<\/current_file>/g)) {
+      attachments.push(display(m[1]));
+    }
+    for (const m of blob.matchAll(/<context_files>\n([\s\S]*?)\n<\/context_files>/g)) {
+      for (const line of m[1].split('\n')) {
+        if (line.trim()) attachments.push(display(line));
+      }
+    }
+    for (const m of blob.matchAll(/<editor_selection path="([^"]+)"(?: lines="([^"]+)")?/g)) {
+      attachments.push(m[2] ? `${display(m[1])}:${m[2]}` : display(m[1]));
+    }
+    return { text, attachments };
+  }
+
+  const idx = content.lastIndexOf(LEGACY_SEPARATOR);
   if (idx === -1) return { text: content, attachments: [] };
-
   const contextBlob = content.slice(0, idx);
-  const text = content.slice(idx + CONTEXT_SEPARATOR.length);
+  const text = content.slice(idx + LEGACY_SEPARATOR.length);
   const attachments: string[] = [];
   for (const m of contextBlob.matchAll(/^(?:Selected code|Current file) \(([^)]+)\):/gm)) {
     attachments.push(m[1]);
@@ -94,7 +127,13 @@ export class ChatState {
   // The agent's current task checklist. Fed by todo_update live and by the
   // todo tool_result's ui_payload on replay, so it survives a session switch.
   todos: Todo[] = $state([]);
-  session: SessionInfo = $state({ name: '', contextUsage: null, permissionMode: null, workingDir: null });
+  session: SessionInfo = $state({
+    name: '',
+    workspace: null,
+    contextUsage: null,
+    permissionMode: null,
+    workingDir: null,
+  });
   // The server's transient notices (wsToast). The inline slash commands
   // report through nothing else, so this is not decoration.
   toast: { message: string; level: string } | null = $state(null);
@@ -104,6 +143,9 @@ export class ChatState {
   // Which session the transcript belongs to — only used to tell a reload of
   // the open session apart from a switch to another one.
   private sessionId: string | null = null;
+  // Only to shorten the absolute paths a replayed message carries back down
+  // to the labels the composer showed when it was sent.
+  private workspaceRoot: string | null = null;
   // Messages handed to the server to run after the turn in flight. The server
   // owns the queue (wsMsgUserMessage.queue), so this is only the count the
   // composer shows — it cannot drift into holding messages that never go out.
@@ -153,6 +195,10 @@ export class ChatState {
       case 'skills':
         this.skills = message.skills.map((s) => ({ ...s, builtin: false }));
         break;
+      case 'hostInfo':
+        this.session.workspace = message.workspace;
+        this.workspaceRoot = message.workspaceRoot;
+        break;
     }
   }
 
@@ -186,10 +232,16 @@ export class ChatState {
     // own fields are re-announced by the session_update that follows a
     // subscribe — blank them so a switch never shows the last session's
     // context usage against this one's transcript.
-    this.session = { name: this.session.name, contextUsage: null, permissionMode: null, workingDir: null };
+    this.session = {
+      name: this.session.name,
+      workspace: this.session.workspace,
+      contextUsage: null,
+      permissionMode: null,
+      workingDir: null,
+    };
     for (const event of events) {
       if (event.type === 'history_user_message') {
-        const { text, attachments } = splitContextFromMessage(event.content);
+        const { text, attachments } = splitContextFromMessage(event.content, this.workspaceRoot);
         this.blocks.push({ kind: 'user', text, attachments: attachments.length ? attachments : undefined });
       } else {
         this.handleEvent(event);
