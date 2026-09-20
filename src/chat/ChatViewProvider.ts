@@ -22,7 +22,15 @@ type OutboundFile = { name: string; dataUrl: string };
 // Messages the webview sends to the extension host.
 type InboundMessage =
   | { command: 'ready' }
-  | { command: 'send'; text: string; files?: OutboundFile[] }
+  | {
+      command: 'send';
+      text: string;
+      files?: OutboundFile[];
+      /** Run after the turn in flight rather than steering it. */
+      queue?: boolean;
+      /** A command the server applies inline — send the text verbatim. */
+      inline?: boolean;
+    }
   | { command: 'interrupt' }
   | { command: 'confirm'; id: string; result: string }
   // One message per question SET: the picker submits all answers at once.
@@ -78,7 +86,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     view.webview.options = { enableScripts: true, localResourceRoots: [webviewRoot] };
     view.webview.html = this.buildHtml(view.webview, webviewRoot);
 
-    const post = (message: unknown) => void view.webview.postMessage(message);
+    // Swallows: postMessage rejects once VS Code has torn the webview down,
+    // and every caller here is fire-and-forget by nature (the webview asks for
+    // whatever it needs again on its next 'ready').
+    const post = (message: unknown) => void Promise.resolve(view.webview.postMessage(message)).catch(() => {});
     const postActiveFile = () => post({ command: 'activeFile', label: this.activeFileLabel() });
     this.subscriptions.push(
       this.controller.onStateChange((state) => {
@@ -124,7 +135,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     post({ command: 'connectionState', state: this.controller.getState() });
     post({ command: 'attachments', labels: [] });
-    if (this.controller.getState() === 'connected') void this.postSkills(post);
+    // Skills are not posted here: these posts race the webview's script load,
+    // and the 'ready' handshake below re-sends them for exactly that reason.
   }
 
   dispose(): void {
@@ -162,7 +174,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         void this.session.replayCurrentHistory();
         break;
       case 'send':
-        this.send(message.text, message.files, post);
+        this.send(message, post);
         break;
       case 'interrupt':
         this.guard(post, () => this.session.interrupt());
@@ -254,7 +266,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return label === this.lastAutoAttachedLabel ? null : label;
   }
 
-  private send(text: string, files: OutboundFile[] | undefined, post: (message: unknown) => void): void {
+  private send(
+    message: { text: string; files?: OutboundFile[]; queue?: boolean; inline?: boolean },
+    post: (message: unknown) => void,
+  ): void {
+    const { text, files } = message;
+    // A command the server applies inline (/clear, /compact, /reload, /goal)
+    // is matched against the WHOLE trimmed message. Appending the open file to
+    // it — which every other message gets — turns it into an ordinary prompt:
+    // the session isn't cleared, a full turn runs, and the webview (which
+    // rendered no bubble and set no busy state for it) shows a reply out of
+    // nowhere. It also must not consume the user's pinned attachments, which
+    // are for the message they are still composing.
+    if (message.inline) {
+      this.session.sendMessage(text).catch((err) => {
+        post({ command: 'sendError', message: err instanceof Error ? err.message : String(err) });
+      });
+      return;
+    }
+
     const attachments = [...this.pendingAttachments.values()];
     // Only fall back to auto-capturing the whole current file when the user
     // has pinned nothing explicit — an explicit selection/file reference means
@@ -283,6 +313,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .sendMessage(
         combineContext(attachments, text),
         files?.map((f) => ({ name: f.name, dataUrl: f.dataUrl })),
+        message.queue,
       )
       .catch((err) => {
         post({ command: 'sendError', message: err instanceof Error ? err.message : String(err) });

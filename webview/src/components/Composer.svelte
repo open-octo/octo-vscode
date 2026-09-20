@@ -48,10 +48,12 @@
   const menuOpen = $derived(matches.length > 0);
   let active = $state(0);
 
+  // Keyed on the candidates themselves, not just their count: "/re" and "/rc"
+  // can both match two entries while matching different ones, and a highlight
+  // left on index 1 would then point at something the user never looked at.
+  const matchKey = $derived(matches.map((m) => m.name).join('\u0000'));
   $effect(() => {
-    // Reset the highlight whenever the candidate set changes, so it can never
-    // point past the end of a narrowed list.
-    void matches.length;
+    void matchKey;
     active = 0;
   });
 
@@ -212,11 +214,11 @@
         {/if}
       </span>
       {#if busy}
-        <button class="icon-btn stop-btn" onclick={onInterrupt} title="Stop" aria-label="Stop">
+        <button class="icon-btn stop-btn pushed-right" onclick={onInterrupt} title="Stop" aria-label="Stop">
           <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5" /></svg>
         </button>
       {/if}
-      <button class="icon-btn send" disabled={disabled || (!draft.trim() && !images.length)} onclick={submit} title={busy ? 'Queue this message' : 'Send'} aria-label="Send">
+      <button class="icon-btn send" class:pushed-right={!busy} disabled={disabled || (!draft.trim() && !images.length)} onclick={submit} title={busy ? 'Queue this message' : 'Send'} aria-label="Send">
         <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M8 12.5V3.5M4 7.5L8 3.5l4 4" />
         </svg>
@@ -385,7 +387,6 @@
     cursor: not-allowed;
   }
   .icon-btn.stop-btn {
-    margin-left: auto;
     background: var(--vscode-button-secondaryBackground);
     color: var(--vscode-button-secondaryForeground);
   }
@@ -396,8 +397,9 @@
     background: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
   }
-  /* Only the leftmost of the two right-hand buttons pushes off the hint. */
-  .toolbar > .icon-btn.send:nth-child(3) {
+  /* Whichever button comes first on the right takes the gap, so adding
+     anything to the toolbar can't silently break the layout. */
+  .icon-btn.pushed-right {
     margin-left: auto;
   }
   .icon-btn.send:hover:not(:disabled) {

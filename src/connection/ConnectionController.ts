@@ -178,8 +178,8 @@ export class ConnectionController {
     return this.requireClient().deleteSession(sessionId);
   }
 
-  sendUserMessage(sessionId: string, content: string, files?: OctoUserFile[]): void {
-    this.requireClient().sendUserMessage(sessionId, content, files);
+  sendUserMessage(sessionId: string, content: string, files?: OctoUserFile[], queue = false): void {
+    this.requireClient().sendUserMessage(sessionId, content, files, queue);
   }
 
   interrupt(sessionId: string): void {

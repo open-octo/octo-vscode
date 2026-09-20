@@ -57,14 +57,40 @@ export class SessionTreeItem extends vscode.TreeItem {
  * chat view itself (ChatViewProvider). Clicking an item switches the chat to
  * that session; the composer and transcript live entirely in the chat view.
  */
+/** Coalescing window for refresh(). The extension refreshes on every event
+ * off the live stream — hundreds of text deltas in one turn — and each
+ * repaint of a visible tree costs two REST round trips (the session list and
+ * the project's membership). A quarter second of lag on a sidebar nobody is
+ * staring at is not perceptible; the round trips are. */
+const REFRESH_DEBOUNCE_MS = 250;
+
 export class SessionListProvider implements vscode.TreeDataProvider<SessionTreeItem> {
   private readonly changeEmitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changeEmitter.event;
+  private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly session: ChatSessionManager) {}
 
+  /** Debounced — for the event stream. A user gesture wants refreshNow(). */
   refresh(): void {
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.changeEmitter.fire();
+    }, REFRESH_DEBOUNCE_MS);
+  }
+
+  refreshNow(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
     this.changeEmitter.fire();
+  }
+
+  dispose(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.changeEmitter.dispose();
   }
 
   getTreeItem(element: SessionTreeItem): vscode.TreeItem {

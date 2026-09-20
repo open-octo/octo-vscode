@@ -101,10 +101,13 @@ export class ChatState {
   // Installed skills, for the composer's "/" menu. Built-ins are static (see
   // inlineSlash.ts); these come from the host's GET /api/skills.
   skills: SlashItem[] = $state([]);
-  // Messages typed while a turn was running, sent in order as it finishes.
-  // Their bubbles are already in the transcript — this holds only what still
-  // has to go on the wire. Reactive because the composer shows its depth.
-  private queue: { text: string; files?: OutboundFile[] }[] = $state([]);
+  // Which session the transcript belongs to — only used to tell a reload of
+  // the open session apart from a switch to another one.
+  private sessionId: string | null = null;
+  // Messages handed to the server to run after the turn in flight. The server
+  // owns the queue (wsMsgUserMessage.queue), so this is only the count the
+  // composer shows — it cannot drift into holding messages that never go out.
+  queuedCount: number = $state(0);
 
   // Correlates tool_result/tool_error/tool_stdout back to their tool_call by
   // tool_id — the only reliable pairing, since these events carry no
@@ -142,7 +145,7 @@ export class ChatState {
         break;
       }
       case 'history':
-        this.loadHistory(message.events);
+        this.loadHistory(message.sessionId, message.events);
         break;
       case 'sessionInfo':
         this.session.name = message.name;
@@ -161,7 +164,13 @@ export class ChatState {
    * unlike the live path there's no risk of double-rendering since this
    * only ever runs once per session switch, never alongside a live send.
    */
-  private loadHistory(events: OctoEvent[]): void {
+  private loadHistory(sessionId: string, events: OctoEvent[]): void {
+    // A reload of the SAME session (what /clear and /compact trigger) must not
+    // wipe the toast that announced it: the server broadcasts the toast right
+    // after history_reload, and the REST round trip behind this call lands
+    // after it. Only an actual switch clears the previous session's notice.
+    const switched = sessionId !== this.sessionId;
+    this.sessionId = sessionId;
     this.blocks = [];
     this.toolBlocksById.clear();
     this.busy = false;
@@ -170,9 +179,9 @@ export class ChatState {
     this.sendError = null;
     this.pendingConfirmation = null;
     this.pendingQuestion = null;
-    this.toast = null;
+    if (switched) this.toast = null;
     this.todos = [];
-    this.queue = [];
+    this.queuedCount = 0;
     // Name aside (the host sends it alongside this history), the session's
     // own fields are re-announced by the session_update that follows a
     // subscribe — blank them so a switch never shows the last session's
@@ -186,53 +195,50 @@ export class ChatState {
         this.handleEvent(event);
       }
     }
+    // After the replay, not before: a replayed progress event sets busy, and
+    // the live stream is what's allowed to say a turn is running.
+    this.busy = false;
   }
 
   sendMessage(text: string, files?: OutboundFile[]): void {
     const trimmed = text.trim();
     if (!trimmed && !files?.length) return;
 
-    const inline = inlineSlashCommand(trimmed, !!files?.length);
-    if (inline) {
+    // Rebuilt as plain objects: postMessage structured-clones its payload and
+    // throws DataCloneError on a $state proxy, which is what the composer's
+    // image list is. 85355b6 fixed this same trap for the question picker's
+    // answers; anything else crossing to the host has to do it too.
+    const plainFiles = files?.length ? files.map((f) => ({ name: f.name, dataUrl: f.dataUrl })) : undefined;
+
+    if (inlineSlashCommand(trimmed, !!plainFiles?.length)) {
       // No bubble and no busy state: the server answers an inline command with
       // a toast (and, for /clear and /compact, a history_reload), never with a
       // turn — so a bubble would describe a message the session doesn't hold,
-      // and busy would wait on a `complete` that never comes.
+      // and busy would wait on a `complete` that never comes. `inline` tells
+      // the host to send the text verbatim: the server matches the whole
+      // trimmed message, so a line of appended editor context would quietly
+      // turn the command into an ordinary prompt.
       this.sendError = null;
       this.toast = null;
-      postToHost({ command: 'send', text: trimmed });
+      postToHost({ command: 'send', text: trimmed, inline: true });
       return;
     }
 
     // Rendered optimistically rather than on the server's history_user_message
     // echo — the echo carries the host's appended editor context too, which is
     // not what the user typed.
-    this.blocks.push({ kind: 'user', text: trimmed, attachments: files?.map((f) => f.name) });
+    this.blocks.push({ kind: 'user', text: trimmed, attachments: plainFiles?.map((f) => f.name) });
     this.sendError = null;
     this.status = null;
     this.toast = null;
-    if (this.busy) {
-      // Queued rather than dropped: a message typed mid-turn is a follow-up
-      // the user has already committed to, and silently discarding it is the
-      // worse failure. It goes on the wire in order once the turn completes.
-      this.queue.push({ text: trimmed, files });
-      return;
-    }
-    this.busy = true;
-    postToHost({ command: 'send', text: trimmed, files });
-  }
-
-  /** Whether anything is waiting behind the running turn — the composer shows
-   * a count so a queued message doesn't look lost. */
-  get queuedCount(): number {
-    return this.queue.length;
-  }
-
-  private flushQueue(): void {
-    const next = this.queue.shift();
-    if (!next) return;
-    this.busy = true;
-    postToHost({ command: 'send', text: next.text, files: next.files });
+    // Mid-turn, the SERVER parks the message and runs it as its own chained
+    // turn (wsMsgUserMessage.queue). Holding it here instead would strand it
+    // on an interrupt, a rejection, or a webview rebuild — every one of which
+    // leaves the bubble in the transcript claiming it was sent.
+    const queue = this.busy;
+    if (queue) this.queuedCount += 1;
+    else this.busy = true;
+    postToHost({ command: 'send', text: trimmed, files: plainFiles, queue });
   }
 
   interrupt(): void {
@@ -343,6 +349,11 @@ export class ChatState {
         // snapshot, never on the live turn-start/re-seed broadcasts this
         // event actually carries — those only set progress_type.
         this.status = event.progress_type === 'thinking' ? 'Thinking…' : event.message ?? null;
+        // A turn is demonstrably running, whoever started it: a message the
+        // server had queued, a steer, or another client on this session.
+        // loadHistory settles busy after the replay, so a replayed progress
+        // can't leave the composer stuck.
+        this.busy = true;
         break;
       case 'todo_update':
         // An empty list is meaningful, not a no-op: /clear broadcasts one to
@@ -365,10 +376,16 @@ export class ChatState {
         this.status = null;
         this.sendError = event.message;
         break;
+      case 'interrupted':
+        this.busy = false;
+        this.status = null;
+        break;
       case 'complete':
         this.busy = false;
         this.status = null;
-        this.flushQueue();
+        // One `complete` per turn, and a queued message is its own turn — so
+        // this retires exactly one of them.
+        this.queuedCount = Math.max(0, this.queuedCount - 1);
         break;
       case 'request_confirmation':
         this.pendingConfirmation = event;

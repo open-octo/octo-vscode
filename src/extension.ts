@@ -42,6 +42,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(session);
 
   const sessionList = new SessionListProvider(session);
+  context.subscriptions.push(sessionList);
   context.subscriptions.push(vscode.window.registerTreeDataProvider('octo.sessionsView', sessionList));
 
   // The chat itself: a view in the same Activity Bar container, below the
@@ -94,11 +95,21 @@ export function activate(context: vscode.ExtensionContext): void {
       // Focus first: the reveal is what makes VS Code resolve the webview, so
       // the new session's (empty) history has somewhere to land.
       await ChatViewProvider.reveal();
-      // A genuine connection failure here was already reported once by
-      // ConnectionController.connect()'s own showErrorMessage, and the chat
-      // view's own banner reflects it too — swallow rather than surface a
-      // second, redundant notification.
-      await session.startNewSession().catch(() => undefined);
+      try {
+        await session.startNewSession();
+      } catch (err) {
+        // A connection failure was already reported by
+        // ConnectionController.connect()'s own showErrorMessage, and the chat
+        // view's banner reflects it too — swallowing a second, redundant
+        // notification is the point. Anything else (the workspace's project
+        // deleted by another client, so the create 404s) would otherwise make
+        // the click do nothing at all, with no explanation.
+        if (controller.getState() === 'connected') {
+          void vscode.window.showErrorMessage(
+            `octo: failed to start a session — ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     }),
     vscode.commands.registerCommand('octo.openSession', async (sessionId: string) => {
       await ChatViewProvider.reveal();
@@ -106,7 +117,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await session.switchToSession(sessionId).catch(() => undefined);
       }
     }),
-    vscode.commands.registerCommand('octo.refreshSessions', () => sessionList.refresh()),
+    vscode.commands.registerCommand('octo.refreshSessions', () => sessionList.refreshNow()),
     vscode.commands.registerCommand('octo.renameSession', async (item: SessionTreeItem) => {
       const name = await vscode.window.showInputBox({
         title: 'Rename octo session',
@@ -118,7 +129,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (name === undefined || !name.trim()) return;
       try {
         await session.renameSession(item.session.id, name.trim());
-        sessionList.refresh();
+        sessionList.refreshNow();
       } catch (err) {
         void vscode.window.showErrorMessage(
           `octo: failed to rename session — ${err instanceof Error ? err.message : String(err)}`,
@@ -135,7 +146,7 @@ export function activate(context: vscode.ExtensionContext): void {
       if (confirmed !== 'Delete') return;
       try {
         await session.deleteSession(item.session.id);
-        sessionList.refresh();
+        sessionList.refreshNow();
       } catch (err) {
         void vscode.window.showErrorMessage(
           `octo: failed to delete session — ${err instanceof Error ? err.message : String(err)}`,
@@ -147,7 +158,7 @@ export function activate(context: vscode.ExtensionContext): void {
   void controller
     .connect()
     .then(() => session.restoreLastSession())
-    .then(() => sessionList.refresh());
+    .then(() => sessionList.refreshNow());
 }
 
 export function deactivate(): void {

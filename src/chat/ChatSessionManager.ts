@@ -133,18 +133,22 @@ export class ChatSessionManager {
     if (!this.sessionId) return;
     try {
       await this.controller.ready();
-      const events = await this.controller.getSessionMessages(this.sessionId);
+      const fetchedFor = this.sessionId;
+      const events = await this.controller.getSessionMessages(fetchedFor);
       // sessionId can change out from under the awaits (a concurrent switch);
-      // only fire if we're still on the session we fetched for.
-      if (this.sessionId) this.historyEmitter.fire({ sessionId: this.sessionId, events });
+      // only fire if we're still on the session we fetched for. Comparing
+      // against the id captured before the fetch, not merely "is there one":
+      // a switch mid-fetch would otherwise publish this session's transcript
+      // under the other session's id.
+      if (this.sessionId === fetchedFor) this.historyEmitter.fire({ sessionId: fetchedFor, events });
     } catch {
       // swallow — see doc comment
     }
   }
 
-  async sendMessage(text: string, files?: OctoUserFile[]): Promise<void> {
+  async sendMessage(text: string, files?: OctoUserFile[], queue = false): Promise<void> {
     const sessionId = await this.ensureSession();
-    this.controller.sendUserMessage(sessionId, text, files);
+    this.controller.sendUserMessage(sessionId, text, files, queue);
   }
 
   interrupt(): void {

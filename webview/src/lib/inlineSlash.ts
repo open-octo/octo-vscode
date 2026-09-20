@@ -51,9 +51,11 @@ export const BUILTIN_SLASH_COMMANDS: SlashItem[] = [
  * Returns the query after the slash, or null when the menu shouldn't be open.
  */
 export function slashQuery(draft: string): string | null {
-  // A full-width slash is what an IME-on keyboard produces; the server never
-  // sees it (the menu rewrites the draft on pick), but the menu should still open.
-  const normalized = draft.replace(/^／/, '/');
+  // Both leading characters an IME-on keyboard produces where "/" was meant,
+  // matching the server web composer's own normalizeSlash. The server never
+  // sees either (picking an entry rewrites the draft), but the menu has to
+  // open or the user can't pick anything.
+  const normalized = draft.replace(/^[／、]/, '/');
   if (!/^\/\S*$/.test(normalized)) return null;
   return normalized.slice(1).toLowerCase();
 }

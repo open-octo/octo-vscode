@@ -182,6 +182,8 @@ export type OctoEvent =
   // holds this session's binding. Surfaced the same way — this extension does
   // not offer the force-takeover flow.
   | { type: 'bind_required'; message: string }
+  // The turn was cancelled at the user's request (handleWSInterrupt).
+  | { type: 'interrupted' }
   // Global broadcast (session_id in the payload, but sent to every client,
   // not just this session's subscribers) fired once per session after its
   // first turn, carrying the model-generated sidebar title. See
@@ -259,11 +261,17 @@ export class OctoClient {
     this.send({ type: 'unsubscribe', session_id: sessionId });
   }
 
-  sendUserMessage(sessionId: string, content: string, files?: OctoUserFile[]): void {
+  /**
+   * `queue` parks the message server-side to run as its own chained turn after
+   * the one in flight, instead of steering that turn (ws_types.go's
+   * wsMsgUserMessage.Queue). Ignored by the server when no turn is running.
+   */
+  sendUserMessage(sessionId: string, content: string, files?: OctoUserFile[], queue = false): void {
     this.send({
       type: 'user_message',
       session_id: sessionId,
       content,
+      ...(queue ? { queue: true } : {}),
       ...(files?.length
         ? {
             files: files.map((f) => ({

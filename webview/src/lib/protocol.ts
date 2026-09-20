@@ -76,6 +76,9 @@ export type OctoEvent =
   // otherwise waiting on 'complete'.
   | { type: 'send_rejected'; message: string }
   | { type: 'bind_required'; message: string }
+  // The turn was cancelled at the user's request. Broadcast by
+  // handleWSInterrupt alongside cancelling the context.
+  | { type: 'interrupted' }
   // REST history replay only — see octoClient.ts's OctoEvent doc comment.
   // Currently unhandled: a toolless intermediate round's reasoning trace
   // just doesn't render in replay (reasoning display is best-effort anyway).
@@ -113,7 +116,19 @@ export type OutboundFile = { name: string; dataUrl: string };
 
 export type OutboundHostMessage =
   | { command: 'ready' }
-  | { command: 'send'; text: string; files?: OutboundFile[] }
+  | {
+      command: 'send';
+      text: string;
+      files?: OutboundFile[];
+      /** Ask the server to run this as its own turn after the one in flight,
+       * rather than steering the running one (wsMsgUserMessage.queue). */
+      queue?: boolean;
+      /** A command the server applies inline (see inlineSlash.ts). The host
+       * must send the text VERBATIM: the server matches the whole trimmed
+       * message, so a line of editor context appended to it turns the command
+       * into an ordinary chat message that runs a full turn. */
+      inline?: boolean;
+    }
   | { command: 'interrupt' }
   | { command: 'confirm'; id: string; result: string }
   // One message closes the whole question set: the picker accumulates
