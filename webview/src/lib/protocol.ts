@@ -1,5 +1,5 @@
 // Mirrors src/octoClient/octoClient.ts's OctoEvent union and the extension
-// host <-> webview postMessage contract (ChatPanel.ts). Duplicated rather
+// host <-> webview postMessage contract (ChatViewProvider.ts). Duplicated rather
 // than imported: that file pulls in `ws`, a Node-only module that can't
 // land in this browser bundle. Keep the two in sync by hand.
 
@@ -63,6 +63,22 @@ export type OctoEvent =
   | { type: 'dismiss_user_question'; question_id: string }
   | { type: 'session_deleted'; session_id: string }
   | { type: 'session_activity'; session_id: string; kind: string }
+  // Transient client-facing notice (wsToast). The inline slash commands
+  // (/clear, /compact, /reload, /goal) run no turn and report ONLY through
+  // this, so it is the composer's sole feedback for them.
+  | { type: 'toast'; message: string; level?: string }
+  // "Re-fetch this session's history" — the host intercepts it (see
+  // ChatSessionManager) and answers with a fresh 'history' message, so the
+  // webview never has to act on it.
+  | { type: 'history_reload' }
+  // The message never reached a turn (session gone, server draining, binding
+  // held elsewhere). Nothing follows it, so it is what releases a composer
+  // otherwise waiting on 'complete'.
+  | { type: 'send_rejected'; message: string }
+  | { type: 'bind_required'; message: string }
+  // The turn was cancelled at the user's request. Broadcast by
+  // handleWSInterrupt alongside cancelling the context.
+  | { type: 'interrupted' }
   // REST history replay only — see octoClient.ts's OctoEvent doc comment.
   // Currently unhandled: a toolless intermediate round's reasoning trace
   // just doesn't render in replay (reasoning display is best-effort anyway).
@@ -86,11 +102,33 @@ export type InboundHostMessage =
   // The chat view switched to a (possibly different, possibly brand new)
   // session — replaces the transcript with the replayed history (empty for
   // a new session).
-  | { command: 'history'; sessionId: string; events: OctoEvent[] };
+  | { command: 'history'; sessionId: string; events: OctoEvent[] }
+  // The header's session identity. Sent on every switch and whenever octo
+  // auto-titles the open session (session_renamed).
+  | { command: 'sessionInfo'; sessionId: string | null; name: string }
+  // Installed skills for the composer's "/" menu, fetched by the host once
+  // the connection is up (GET /api/skills).
+  | { command: 'skills'; skills: { name: string; description: string }[] };
+
+/** An image pasted into the composer, forwarded to the server as an inline
+ * attachment (ws_types.go's wsUserFile.data_url). */
+export type OutboundFile = { name: string; dataUrl: string };
 
 export type OutboundHostMessage =
   | { command: 'ready' }
-  | { command: 'send'; text: string }
+  | {
+      command: 'send';
+      text: string;
+      files?: OutboundFile[];
+      /** Ask the server to run this as its own turn after the one in flight,
+       * rather than steering the running one (wsMsgUserMessage.queue). */
+      queue?: boolean;
+      /** A command the server applies inline (see inlineSlash.ts). The host
+       * must send the text VERBATIM: the server matches the whole trimmed
+       * message, so a line of editor context appended to it turns the command
+       * into an ordinary chat message that runs a full turn. */
+      inline?: boolean;
+    }
   | { command: 'interrupt' }
   | { command: 'confirm'; id: string; result: string }
   // One message closes the whole question set: the picker accumulates

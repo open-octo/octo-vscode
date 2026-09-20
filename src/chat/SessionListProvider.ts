@@ -3,30 +3,94 @@ import * as vscode from 'vscode';
 import { ChatSessionManager } from './ChatSessionManager';
 import { OctoSession } from '../octoClient/octoClient';
 
+/** "3m", "2h", "5d" — a width-stable age, in the space a tree item's
+ * description actually has. Empty when the server sent no timestamp. */
+function age(session: OctoSession): string {
+  const stamp = Date.parse(session.updatedAt ?? session.createdAt ?? '');
+  if (!stamp) return '';
+  const minutes = Math.max(0, Math.round((Date.now() - stamp) / 60000));
+  if (minutes < 1) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
+}
+
+/** The icon carries the session's state, because the description column is
+ * too narrow to spell it out: something waiting on the user outranks
+ * something running, which outranks the plain open/not-open marker. */
+function icon(session: OctoSession, isCurrent: boolean): vscode.ThemeIcon {
+  if (session.pendingQuestion || session.pendingConfirmation) {
+    return new vscode.ThemeIcon('question', new vscode.ThemeColor('list.warningForeground'));
+  }
+  if (session.status === 'running' || session.status === 'busy') {
+    return new vscode.ThemeIcon('sync~spin');
+  }
+  return new vscode.ThemeIcon(isCurrent ? 'circle-filled' : 'circle-outline');
+}
+
 export class SessionTreeItem extends vscode.TreeItem {
   constructor(readonly session: OctoSession, isCurrent: boolean) {
     super(session.name || 'Untitled', vscode.TreeItemCollapsibleState.None);
-    this.description = session.status;
-    this.iconPath = new vscode.ThemeIcon(isCurrent ? 'circle-filled' : 'circle-outline');
+    const waiting = session.pendingQuestion || session.pendingConfirmation;
+    this.description = [waiting ? 'waiting for you' : '', age(session)].filter(Boolean).join(' · ');
+    this.iconPath = icon(session, isCurrent);
+    this.tooltip = new vscode.MarkdownString(
+      [
+        `**${session.name || 'Untitled'}**`,
+        session.status ? `Status: ${session.status}` : '',
+        typeof session.contextUsage === 'number' ? `Context: ${session.contextUsage}%` : '',
+        session.updatedAt ? `Updated: ${new Date(session.updatedAt).toLocaleString()}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    );
+    // Both the inline delete/rename buttons hang off this (package.json's
+    // view/item/context menu).
+    this.contextValue = 'octoSession';
     this.command = { command: 'octo.openSession', title: 'Open Session', arguments: [session.id] };
   }
 }
 
 /**
- * The Activity Bar's persistent view: just the list, plus a title-bar "New
- * Session" button (contributes.menus["view/title"]) — no composer, no
- * input box here at all. Opening an item (or "New") opens/reveals the chat
- * detail surface as a WebviewPanel beside the editor (see ChatPanel), which
- * is where the actual conversation and its composer live.
+ * The session list at the top of the octo Activity Bar container, above the
+ * chat view itself (ChatViewProvider). Clicking an item switches the chat to
+ * that session; the composer and transcript live entirely in the chat view.
  */
+/** Coalescing window for refresh(). The extension refreshes on every event
+ * off the live stream — hundreds of text deltas in one turn — and each
+ * repaint of a visible tree costs two REST round trips (the session list and
+ * the project's membership). A quarter second of lag on a sidebar nobody is
+ * staring at is not perceptible; the round trips are. */
+const REFRESH_DEBOUNCE_MS = 250;
+
 export class SessionListProvider implements vscode.TreeDataProvider<SessionTreeItem> {
   private readonly changeEmitter = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changeEmitter.event;
+  private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly session: ChatSessionManager) {}
 
+  /** Debounced — for the event stream. A user gesture wants refreshNow(). */
   refresh(): void {
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.changeEmitter.fire();
+    }, REFRESH_DEBOUNCE_MS);
+  }
+
+  refreshNow(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
     this.changeEmitter.fire();
+  }
+
+  dispose(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.changeEmitter.dispose();
   }
 
   getTreeItem(element: SessionTreeItem): vscode.TreeItem {

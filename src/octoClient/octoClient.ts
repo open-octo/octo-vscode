@@ -13,13 +13,52 @@ export interface OctoSession {
   workingDir?: string;
   // RFC3339 — sessionItem.CreatedAt is a Go time.Time, not a unix timestamp.
   createdAt?: string;
+  // Same shape as createdAt. sessionItem.UpdatedAt is ContentUpdatedAt when the
+  // session has one (see toSessionItem's comment) — i.e. last real message, not
+  // bookkeeping writes — which is what the sidebar's ordering wants.
+  updatedAt?: string;
+  // A turn this session is blocked on, waiting for an answer from any client.
+  // The sidebar badges these so a session parked on a question is findable
+  // without opening each one.
+  pendingQuestion?: boolean;
+  pendingConfirmation?: boolean;
+  // 0-100, sessionItem.ContextUsage.
+  contextUsage?: number;
 }
 
+/**
+ * An octo "project": a group of sessions sharing a workspace directory and a
+ * set of mounted source folders. A session's working directory comes from its
+ * project — see createSession's groupId.
+ */
+export interface OctoSessionGroup {
+  id: string;
+  name: string;
+  /** The project's own generated workspace — never one of the mounted folders. */
+  workingDir?: string;
+  /** External folders mounted as extra roots for the tools. */
+  sourceDirs: string[];
+  /** Members, in the order the server holds them. */
+  sessionIds: string[];
+}
+
+/** One entry of GET /api/skills — the "/" menu's non-builtin half. */
+export interface OctoSkill {
+  name: string;
+  description: string;
+  enabled: boolean;
+}
+
+/** An attachment riding along with a user message. Mirrors ws_types.go's
+ * wsUserFile — the wire keys are snake_case, applied in sendUserMessage. */
 export interface OctoUserFile {
   name: string;
+  /** Inline base64 data URL (images). */
   dataUrl?: string;
-  path?: string;
-  mimeType?: string;
+  /** A real absolute path on this machine — honored only for a loopback peer,
+   * which is the only kind this extension ever talks to. No upload: the agent
+   * reads the file in place. */
+  localPath?: string;
 }
 
 // ui_payload shapes, keyed by tool. Built ad hoc in ws_handlers.go's
@@ -125,6 +164,26 @@ export type OctoEvent =
   | { type: 'request_user_question'; question_id: string; questions: AskQuestion[]; secret?: boolean }
   | { type: 'dismiss_user_question'; question_id: string }
   | { type: 'session_deleted'; session_id: string }
+  // Broadcast globally the moment any client creates a session (handlers.go's
+  // handleCreateSession, plus branch/cron) — the sidebar's cue to re-list.
+  | { type: 'session_created'; session_id: string }
+  // Transient, client-facing notice (wsToast). The inline slash commands
+  // (/clear, /compact, /reload, /goal) report ONLY through this — they run no
+  // turn, so nothing else would tell the user what happened.
+  | { type: 'toast'; message: string; level?: string }
+  // "Re-fetch this session's history from REST" — sent after /clear and
+  // /compact rewrite the transcript server-side.
+  | { type: 'history_reload' }
+  // The message never reached a turn (session gone, draining, binding held by
+  // another client that can't be forced). Nothing else arrives after it, so
+  // it's what releases a composer waiting on 'complete'.
+  | { type: 'send_rejected'; message: string }
+  // A recoverable variant of the above: another entry (desktop, web, channel)
+  // holds this session's binding. Surfaced the same way — this extension does
+  // not offer the force-takeover flow.
+  | { type: 'bind_required'; message: string }
+  // The turn was cancelled at the user's request (handleWSInterrupt).
+  | { type: 'interrupted' }
   // Global broadcast (session_id in the payload, but sent to every client,
   // not just this session's subscribers) fired once per session after its
   // first turn, carrying the model-generated sidebar title. See
@@ -202,12 +261,26 @@ export class OctoClient {
     this.send({ type: 'unsubscribe', session_id: sessionId });
   }
 
-  sendUserMessage(sessionId: string, content: string, files?: OctoUserFile[]): void {
+  /**
+   * `queue` parks the message server-side to run as its own chained turn after
+   * the one in flight, instead of steering that turn (ws_types.go's
+   * wsMsgUserMessage.Queue). Ignored by the server when no turn is running.
+   */
+  sendUserMessage(sessionId: string, content: string, files?: OctoUserFile[], queue = false): void {
     this.send({
       type: 'user_message',
       session_id: sessionId,
       content,
-      ...(files?.length ? { files } : {}),
+      ...(queue ? { queue: true } : {}),
+      ...(files?.length
+        ? {
+            files: files.map((f) => ({
+              name: f.name,
+              ...(f.dataUrl ? { data_url: f.dataUrl } : {}),
+              ...(f.localPath ? { local_path: f.localPath } : {}),
+            })),
+          }
+        : {}),
     });
   }
 
@@ -230,20 +303,72 @@ export class OctoClient {
     this.send({ type: 'user_question_answer', question_id: questionId, outcome, answers });
   }
 
-  async createSession(opts: { name?: string; workingDir?: string } = {}): Promise<OctoSession> {
+  /**
+   * Creates a session, optionally filing it under a project (`groupId`).
+   *
+   * Creation time is the ONLY moment that membership can be established: the
+   * server's handleCreateSession registers the group BEFORE
+   * applyDefaultWorkspaceDir, whose guard asks "is this session in a project?"
+   * — a session created without it is seeded a throwaway task workspace
+   * (~/Octo/tasks/<id>) and stranded there for good, since
+   * PATCH /api/sessions/{id}/working_dir now answers 409 unconditionally.
+   */
+  async createSession(opts: { name?: string; groupId?: string } = {}): Promise<OctoSession> {
     const body = await this.fetchJson('/api/sessions', {
       method: 'POST',
-      body: JSON.stringify({ name: opts.name ?? '' }),
+      body: JSON.stringify({
+        name: opts.name ?? '',
+        ...(opts.groupId ? { group_id: opts.groupId } : {}),
+      }),
     });
     const record = body as { session?: Record<string, unknown> };
     if (!record.session) {
       throw new Error('octo serve: invalid session creation response');
     }
-    const session = normalizeSession(record.session);
-    if (opts.workingDir) {
-      await this.setWorkingDir(session.id, opts.workingDir);
+    return normalizeSession(record.session);
+  }
+
+  async listSessionGroups(): Promise<OctoSessionGroup[]> {
+    const body = (await this.fetchJson('/api/session-groups')) as { groups?: Record<string, unknown>[] };
+    return (body.groups ?? []).map(normalizeSessionGroup);
+  }
+
+  /**
+   * Creates a project mounting `sourceDirs`. The server generates the
+   * project's own workspace under its workspace root; the directories passed
+   * here become mounted source folders, never the working directory.
+   */
+  async createSessionGroup(name: string, sourceDirs: string[]): Promise<OctoSessionGroup> {
+    const body = (await this.fetchJson('/api/session-groups', {
+      method: 'POST',
+      body: JSON.stringify({ name, source_dirs: sourceDirs }),
+    })) as { group?: Record<string, unknown> };
+    if (!body.group) {
+      throw new Error('octo serve: invalid session group creation response');
     }
-    return session;
+    return normalizeSessionGroup(body.group);
+  }
+
+  /** Sets a session's sidebar title. A real title also permanently suppresses
+   * octo's own auto-titling (isAutoNamePlaceholder), which is what the user
+   * asking for a name means. */
+  async renameSession(sessionId: string, name: string): Promise<void> {
+    await this.fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  /** Installed skills, for the composer's "/" menu. */
+  async listSkills(): Promise<OctoSkill[]> {
+    const body = (await this.fetchJson('/api/skills')) as { skills?: Record<string, unknown>[] };
+    return (body.skills ?? [])
+      .map((s) => ({
+        name: String(s.name ?? ''),
+        description: typeof s.description === 'string' ? s.description : '',
+        enabled: s.enabled !== false,
+      }))
+      .filter((s) => s.name && s.enabled);
   }
 
   async listSessions(): Promise<OctoSession[]> {
@@ -258,13 +383,6 @@ export class OctoClient {
       events?: unknown[];
     };
     return (body.events ?? []) as OctoEvent[];
-  }
-
-  async setWorkingDir(sessionId: string, workingDir: string): Promise<void> {
-    await this.fetchJson(`/api/sessions/${encodeURIComponent(sessionId)}/working_dir`, {
-      method: 'PATCH',
-      body: JSON.stringify({ working_dir: workingDir }),
-    });
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -352,5 +470,21 @@ function normalizeSession(record: Record<string, unknown>): OctoSession {
     status: typeof record.status === 'string' ? record.status : undefined,
     workingDir: typeof record.working_dir === 'string' ? record.working_dir : undefined,
     createdAt: typeof record.created_at === 'string' ? record.created_at : undefined,
+    updatedAt: typeof record.updated_at === 'string' ? record.updated_at : undefined,
+    pendingQuestion: record.pending_question === true,
+    pendingConfirmation: record.pending_confirmation === true,
+    contextUsage: typeof record.context_usage === 'number' ? record.context_usage : undefined,
+  };
+}
+
+function normalizeSessionGroup(record: Record<string, unknown>): OctoSessionGroup {
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+  return {
+    id: String(record.id ?? ''),
+    name: String(record.name ?? ''),
+    workingDir: typeof record.working_dir === 'string' ? record.working_dir : undefined,
+    sourceDirs: strings(record.source_dirs),
+    sessionIds: strings(record.session_ids),
   };
 }

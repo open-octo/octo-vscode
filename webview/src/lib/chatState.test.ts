@@ -1,10 +1,25 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { ChatState, type ToolBlock } from './chatState.svelte';
-import type { OctoEvent } from './protocol';
+import type { OctoEvent, OutboundHostMessage } from './protocol';
 
 function fireEvent(state: ChatState, event: OctoEvent): void {
   state.handleHostMessage({ command: 'event', event });
+}
+
+// Everything postToHost has sent — the test setup's stub records it, and
+// structured-clones it on the way past exactly as the real bridge does.
+function posted(): OutboundHostMessage[] {
+  return (globalThis as Record<string, unknown>).postedToHost as OutboundHostMessage[];
+}
+
+function lastPosted(): OutboundHostMessage {
+  const all = posted();
+  return all[all.length - 1];
+}
+
+function drainPosted(): void {
+  posted().length = 0;
 }
 
 describe('ChatState tool_id pairing', () => {
@@ -186,16 +201,7 @@ describe('ChatState history replay', () => {
 });
 
 describe('ChatState question answers', () => {
-  // vscodeApi caches the host handle on first use, so the recorder has to be
-  // installed once and drained between cases rather than re-stubbed.
-  const posted: unknown[] = [];
-  (globalThis as unknown as { acquireVsCodeApi: () => unknown }).acquireVsCodeApi = () => ({
-    postMessage: (m: unknown) => posted.push(m),
-  });
-
-  beforeEach(() => {
-    posted.length = 0;
-  });
+  beforeEach(drainPosted);
 
   // The host bridge structured-clones this payload, which throws
   // DataCloneError on a Svelte $state proxy (fixed once in 85355b6 for the
@@ -217,7 +223,7 @@ describe('ChatState question answers', () => {
       { choices: [], custom: 'neither', notes: '' },
     ]);
 
-    expect(posted).toEqual([
+    expect(posted()).toEqual([
       {
         command: 'answerQuestion',
         questionId: 'q_1',
@@ -231,7 +237,7 @@ describe('ChatState question answers', () => {
     // Answering clears the pending question, so a second submit is a no-op.
     expect(state.pendingQuestion).toBeNull();
     state.answerQuestion('submitted', []);
-    expect(posted).toHaveLength(1);
+    expect(posted()).toHaveLength(1);
   });
 
   it('sends no answers when the picker is dismissed', () => {
@@ -243,8 +249,210 @@ describe('ChatState question answers', () => {
     });
     state.answerQuestion('rejected', []);
 
-    expect(posted).toEqual([
+    expect(posted()).toEqual([
       { command: 'answerQuestion', questionId: 'q_2', outcome: 'rejected', answers: [] },
     ]);
+  });
+});
+
+describe('ChatState inline slash commands', () => {
+  it('sends an inline command without a bubble or a busy spinner', () => {
+    const state = new ChatState();
+
+    state.sendMessage('/clear');
+
+    // The server answers these before any turn starts — no
+    // history_user_message, no `complete`. A bubble would describe a message
+    // the session doesn't hold, and busy would never be released.
+    expect(state.blocks).toEqual([]);
+    expect(state.busy).toBe(false);
+  });
+
+  it('treats an inline command carrying files as an ordinary message', () => {
+    const state = new ChatState();
+
+    state.sendMessage('/clear', [{ name: 'shot.png', dataUrl: 'data:image/png;base64,AA' }]);
+
+    // Attachments take the message off the inline path server-side.
+    expect(state.busy).toBe(true);
+    expect(state.blocks).toHaveLength(1);
+  });
+
+  it('shows a toast, the only thing an inline command reports back', () => {
+    const state = new ChatState();
+
+    fireEvent(state, { type: 'toast', message: 'Conversation cleared.', level: 'success' });
+
+    expect(state.toast).toEqual({ message: 'Conversation cleared.', level: 'success' });
+  });
+});
+
+describe('ChatState send queue', () => {
+  it('releases the composer on send_rejected, which nothing follows', () => {
+    const state = new ChatState();
+    state.sendMessage('hello');
+
+    fireEvent(state, { type: 'send_rejected', message: 'session not found: x' });
+
+    expect(state.busy).toBe(false);
+    expect(state.sendError).toBe('session not found: x');
+  });
+});
+
+describe('ChatState session and task state', () => {
+  it('keeps the checklist from both of its carriers', () => {
+    const state = new ChatState();
+
+    // Live: the standalone broadcast.
+    fireEvent(state, { type: 'todo_update', todos: [{ content: 'write it', status: 'in_progress' }] });
+    expect(state.todos).toEqual([{ content: 'write it', status: 'in_progress' }]);
+
+    // Replay: only the tool_result's ui_payload carries it.
+    fireEvent(state, {
+      type: 'tool_result',
+      tool_id: 't',
+      result: 'ok',
+      ui_payload: { type: 'todo', action: 'update', progress: '1/1', todos: [{ content: 'write it', status: 'completed' }] },
+    });
+    expect(state.todos).toEqual([{ content: 'write it', status: 'completed' }]);
+
+    // An empty list is meaningful: /clear retires the panel with one.
+    fireEvent(state, { type: 'todo_update', todos: [] });
+    expect(state.todos).toEqual([]);
+  });
+
+  it('reads the header fields off session_update', () => {
+    const state = new ChatState();
+
+    fireEvent(state, {
+      type: 'session_update',
+      context_usage: 42,
+      permission_mode: 'interactive',
+      working_dir: '/octo/workspaces/repo',
+    });
+
+    expect(state.session.contextUsage).toBe(42);
+    expect(state.session.permissionMode).toBe('interactive');
+    expect(state.session.workingDir).toBe('/octo/workspaces/repo');
+  });
+
+  it('blanks the previous session’s header fields when the transcript is replaced', () => {
+    const state = new ChatState();
+    fireEvent(state, { type: 'session_update', context_usage: 88 });
+    state.handleHostMessage({ command: 'sessionInfo', sessionId: 's2', name: 'Other session' });
+
+    state.handleHostMessage({ command: 'history', sessionId: 's2', events: [] });
+
+    expect(state.session.contextUsage).toBeNull();
+    // The name rides with the switch rather than being re-announced, so it
+    // must survive the reset.
+    expect(state.session.name).toBe('Other session');
+  });
+});
+
+describe('ChatState outgoing payloads', () => {
+  beforeEach(drainPosted);
+
+  it('rebuilds file attachments as plain objects before they cross to the host', () => {
+    const state = new ChatState();
+    const files = [{ name: 'shot.png', dataUrl: 'data:image/png;base64,AA' }];
+
+    state.sendMessage('look at this', files);
+
+    // The composer's image list is a $state array, so what arrives here is a
+    // Proxy — and postMessage structured-clones, which throws DataCloneError
+    // on one. Forwarding the caller's own objects is what makes that reachable;
+    // rebuilding them is what this asserts (the setup's clone would only catch
+    // it when the caller actually passed a proxy).
+    const sent = lastPosted() as { command: 'send'; files?: { name: string }[] };
+    expect(sent.files).toEqual(files);
+    expect(sent.files).not.toBe(files);
+    expect(sent.files?.[0]).not.toBe(files[0]);
+  });
+
+  it('marks an inline command so the host sends it verbatim', () => {
+    const state = new ChatState();
+
+    state.sendMessage('/clear');
+
+    // Without this flag the host appends the open file, and the server — which
+    // matches the whole trimmed message — runs an ordinary turn instead.
+    expect(lastPosted()).toEqual({ command: 'send', text: '/clear', inline: true });
+  });
+
+  it('asks the server to queue a message typed mid-turn', () => {
+    const state = new ChatState();
+    state.sendMessage('first');
+
+    state.sendMessage('second');
+
+    // Server-side queueing (wsMsgUserMessage.queue), not a local buffer: a
+    // buffer strands the message on an interrupt, a rejection or a webview
+    // rebuild, each of which leaves the bubble claiming it was sent.
+    expect(lastPosted()).toMatchObject({ command: 'send', text: 'second', queue: true });
+    expect(state.queuedCount).toBe(1);
+    expect(state.blocks).toHaveLength(2);
+
+    fireEvent(state, { type: 'complete', iterations: 1 });
+    expect(state.queuedCount).toBe(0);
+  });
+});
+
+describe('ChatState turn lifecycle', () => {
+  it('shows a turn as running once progress arrives, whoever started it', () => {
+    const state = new ChatState();
+
+    // A queued message the server dequeued, a steer, or another client on the
+    // same session — none of them go through sendMessage here.
+    fireEvent(state, { type: 'progress', progress_type: 'thinking', phase: 'start' });
+
+    expect(state.busy).toBe(true);
+  });
+
+  it('settles the composer after a replay that contains progress events', () => {
+    const state = new ChatState();
+
+    state.handleHostMessage({
+      command: 'history',
+      sessionId: 's1',
+      events: [{ type: 'progress', message: 'working', phase: 'start' }],
+    });
+
+    expect(state.busy).toBe(false);
+  });
+
+  it('releases the composer when the turn is interrupted', () => {
+    const state = new ChatState();
+    state.sendMessage('long one');
+
+    fireEvent(state, { type: 'interrupted' });
+
+    expect(state.busy).toBe(false);
+  });
+});
+
+describe('ChatState toast lifetime', () => {
+  it('keeps the toast through the history reload that same command triggered', () => {
+    // /clear broadcasts history_reload and then its toast; the host answers the
+    // reload with a REST fetch, so the replayed history lands AFTER the toast.
+    // Clearing it there left the one thing an inline command reports back
+    // invisible.
+    const state = new ChatState();
+    state.handleHostMessage({ command: 'history', sessionId: 's1', events: [] });
+    fireEvent(state, { type: 'toast', message: 'Conversation cleared.', level: 'success' });
+
+    state.handleHostMessage({ command: 'history', sessionId: 's1', events: [] });
+
+    expect(state.toast?.message).toBe('Conversation cleared.');
+  });
+
+  it('drops it when the transcript switches to another session', () => {
+    const state = new ChatState();
+    state.handleHostMessage({ command: 'history', sessionId: 's1', events: [] });
+    fireEvent(state, { type: 'toast', message: 'Conversation cleared.', level: 'success' });
+
+    state.handleHostMessage({ command: 'history', sessionId: 's2', events: [] });
+
+    expect(state.toast).toBeNull();
   });
 });

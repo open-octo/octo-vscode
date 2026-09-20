@@ -16,10 +16,21 @@ import {
   type CapturedAttachment,
 } from '../context/editorContext';
 
+/** An image pasted into the composer (webview protocol.ts's OutboundFile). */
+type OutboundFile = { name: string; dataUrl: string };
+
 // Messages the webview sends to the extension host.
 type InboundMessage =
   | { command: 'ready' }
-  | { command: 'send'; text: string }
+  | {
+      command: 'send';
+      text: string;
+      files?: OutboundFile[];
+      /** Run after the turn in flight rather than steering it. */
+      queue?: boolean;
+      /** A command the server applies inline — send the text verbatim. */
+      inline?: boolean;
+    }
   | { command: 'interrupt' }
   | { command: 'confirm'; id: string; result: string }
   // One message per question SET: the picker submits all answers at once.
@@ -30,16 +41,21 @@ type InboundMessage =
   | { command: 'viewDiff'; diff: string; path?: string };
 
 /**
- * The chat detail surface: a WebviewPanel opened beside the active editor
- * group (ViewColumn.Beside), not the Activity Bar sidebar — the sidebar
- * holds only the session list (SessionListProvider), which has no room and
- * no need for a composer. One panel instance is reused across
- * openNew()/openSession() calls rather than stacking a tab per session.
+ * The chat surface: a WebviewView living in the Activity Bar container next
+ * to the session list, the way VS Code's own chat sits. It used to be a
+ * WebviewPanel opened Beside the editor, which cost an editor tab to hold a
+ * conversation and put the chat in competition with the code it was about.
+ *
+ * VS Code owns this view's lifecycle: it constructs the webview on first
+ * reveal and may tear it down and call resolveWebviewView again after the
+ * view has been hidden for a while, so everything per-webview is wired in
+ * resolve() and torn down on the view's dispose — nothing is assumed to
+ * survive (the composer's unsent draft survives via the webview's own
+ * getState/setState, which is exactly what it's for).
  */
-export class ChatPanel {
-  private static current: ChatPanel | undefined;
+export class ChatViewProvider implements vscode.WebviewViewProvider {
+  static readonly viewType = 'octo.chatView';
 
-  private readonly panel: vscode.WebviewPanel;
   // Keyed by label (the relative path) so re-picking the same file just
   // refreshes its content rather than duplicating a chip.
   private readonly pendingAttachments = new Map<string, CapturedAttachment>();
@@ -52,75 +68,55 @@ export class ChatPanel {
   // switch so a fresh transcript re-establishes "what am I looking at".
   private lastAutoAttachedLabel: string | null = null;
 
-  static async openNew(
-    extensionUri: vscode.Uri,
-    controller: ConnectionController,
-    session: ChatSessionManager,
-  ): Promise<void> {
-    ChatPanel.ensurePanel(extensionUri, controller, session).reveal();
-    // A genuine connection failure here was already reported once by
-    // ConnectionController.connect()'s own showErrorMessage; the panel's
-    // connectionState banner reflects it too, so swallow rather than
-    // surface a second, redundant notification.
-    await session.startNewSession().catch(() => undefined);
+  /** Brings the chat view into focus, resolving it if VS Code has not built
+   * it yet. `.focus` is contributed for every view id; awaiting it is what
+   * guarantees resolveWebviewView has run before the caller posts anything. */
+  static async reveal(): Promise<void> {
+    await vscode.commands.executeCommand(`${ChatViewProvider.viewType}.focus`);
   }
 
-  static async openSession(
-    extensionUri: vscode.Uri,
-    controller: ConnectionController,
-    session: ChatSessionManager,
-    sessionId: string,
-  ): Promise<void> {
-    ChatPanel.ensurePanel(extensionUri, controller, session).reveal();
-    if (sessionId !== session.getSessionId()) {
-      await session.switchToSession(sessionId).catch(() => undefined);
-    }
-  }
-
-  private static ensurePanel(
-    extensionUri: vscode.Uri,
-    controller: ConnectionController,
-    session: ChatSessionManager,
-  ): ChatPanel {
-    ChatPanel.current ??= new ChatPanel(extensionUri, controller, session);
-    return ChatPanel.current;
-  }
-
-  private constructor(
-    extensionUri: vscode.Uri,
+  constructor(
+    private readonly extensionUri: vscode.Uri,
     private readonly controller: ConnectionController,
     private readonly session: ChatSessionManager,
-  ) {
-    const webviewRoot = vscode.Uri.joinPath(extensionUri, 'dist', 'webview');
-    this.panel = vscode.window.createWebviewPanel('octo.chat', 'octo', vscode.ViewColumn.Beside, {
-      enableScripts: true,
-      // A background chat panel losing its JS state (and reloading, with a
-      // visible flash) every time the user clicks back to an editor tab
-      // would be a much worse experience than the memory cost of keeping it
-      // alive — WebviewView doesn't need this (VS Code already retains
-      // sidebar view content on simple visibility toggles), but
-      // WebviewPanel defaults the other way.
-      retainContextWhenHidden: true,
-      localResourceRoots: [webviewRoot],
-    });
-    this.panel.webview.html = this.buildHtml(this.panel.webview, webviewRoot);
+  ) {}
 
-    const post = (message: unknown) => void this.panel.webview.postMessage(message);
+  resolveWebviewView(view: vscode.WebviewView): void {
+    const webviewRoot = vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview');
+    view.webview.options = { enableScripts: true, localResourceRoots: [webviewRoot] };
+    view.webview.html = this.buildHtml(view.webview, webviewRoot);
+
+    // Swallows: postMessage rejects once VS Code has torn the webview down,
+    // and every caller here is fire-and-forget by nature (the webview asks for
+    // whatever it needs again on its next 'ready').
+    const post = (message: unknown) => void Promise.resolve(view.webview.postMessage(message)).catch(() => {});
     const postActiveFile = () => post({ command: 'activeFile', label: this.activeFileLabel() });
     this.subscriptions.push(
-      controller.onStateChange((state) => post({ command: 'connectionState', state })),
-      session.onEvent((event) => {
+      this.controller.onStateChange((state) => {
+        post({ command: 'connectionState', state });
+        if (state === 'connected') void this.postSkills(post);
+      }),
+      this.session.onEvent((event) => {
         post({ command: 'event', event });
         this.autoOpenDiff(event);
       }),
-      session.onHistoryLoaded(({ sessionId, events }) => {
+      this.session.onHistoryLoaded(({ sessionId, events }) => {
         // New/switched transcript — let the current file auto-attach once more,
         // and re-show the composer's context indicator that dedupe had hidden.
         this.lastAutoAttachedLabel = null;
         post({ command: 'history', sessionId, events });
         post({ command: 'activeFile', label: this.activeFileLabel() });
+        void this.postSessionInfo(post, sessionId);
       }),
-      this.panel.webview.onDidReceiveMessage((message: InboundMessage) => this.handleMessage(message, post)),
+      // octo auto-titles a session after its first turn and broadcasts the
+      // name globally — the header would otherwise keep saying "New session"
+      // for the rest of the conversation.
+      this.controller.onEvent(({ event }) => {
+        if (event.type === 'session_renamed' && event.session_id === this.session.getSessionId()) {
+          post({ command: 'sessionInfo', sessionId: event.session_id, name: event.name });
+        }
+      }),
+      view.webview.onDidReceiveMessage((message: InboundMessage) => this.handleMessage(message, post)),
       // Keep the composer's "current file" indicator in lock-step with what
       // captureEditorContext() would attach when nothing is pinned.
       vscode.window.onDidChangeActiveTextEditor(() => postActiveFile()),
@@ -132,17 +128,35 @@ export class ChatPanel {
         postActiveFile();
       }),
     );
-    this.panel.onDidDispose(() => {
+    view.onDidDispose(() => {
       for (const sub of this.subscriptions) sub.dispose();
-      ChatPanel.current = undefined;
+      this.subscriptions.length = 0;
     });
 
-    post({ command: 'connectionState', state: controller.getState() });
+    post({ command: 'connectionState', state: this.controller.getState() });
     post({ command: 'attachments', labels: [] });
+    // Skills are not posted here: these posts race the webview's script load,
+    // and the 'ready' handshake below re-sends them for exactly that reason.
   }
 
-  private reveal(): void {
-    this.panel.reveal(vscode.ViewColumn.Beside);
+  dispose(): void {
+    for (const sub of this.subscriptions) sub.dispose();
+    this.subscriptions.length = 0;
+  }
+
+  /** The "/" menu's non-builtin half. Best-effort: the menu still lists the
+   * built-ins if the server can't be reached. */
+  private async postSkills(post: (message: unknown) => void): Promise<void> {
+    try {
+      const skills = await this.controller.listSkills();
+      post({ command: 'skills', skills: skills.map((s) => ({ name: s.name, description: s.description })) });
+    } catch {
+      // see doc comment
+    }
+  }
+
+  private async postSessionInfo(post: (message: unknown) => void, sessionId: string): Promise<void> {
+    post({ command: 'sessionInfo', sessionId, name: await this.session.sessionName(sessionId) });
   }
 
   private handleMessage(message: InboundMessage, post: (message: unknown) => void): void {
@@ -151,12 +165,16 @@ export class ChatPanel {
         post({ command: 'connectionState', state: this.controller.getState() });
         post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
         post({ command: 'activeFile', label: this.activeFileLabel() });
-        // A freshly (re)opened panel starts with an empty webview; replay the
-        // active session's history now that we know it's listening.
+        // The posts made in resolveWebviewView race the webview's own script
+        // load, so this handshake — the first moment it is provably listening
+        // — is where anything it can't ask for again is (re)sent.
+        void this.postSkills(post);
+        // A freshly (re)built webview starts empty; replay the active
+        // session's history, which also re-sends the header's session info.
         void this.session.replayCurrentHistory();
         break;
       case 'send':
-        this.send(message.text, post);
+        this.send(message, post);
         break;
       case 'interrupt':
         this.guard(post, () => this.session.interrupt());
@@ -203,10 +221,7 @@ export class ChatPanel {
    * see what they're approving, not just the modal's plain-text preview),
    * and a just-applied edit_file result. Both use preview:true/
    * preserveFocus:true so successive edits reuse one tab rather than
-   * piling up new ones and never steal focus from the chat panel, and are
-   * routed to diffColumn() so they open in the editor area rather than on
-   * top of the chat panel's own group (which would hide the chat behind
-   * the diff tab).
+   * piling up new ones and never steal focus from the chat view.
    */
   private autoOpenDiff(event: OctoEvent): void {
     if (event.type === 'request_confirmation' && event.diff) {
@@ -216,17 +231,12 @@ export class ChatPanel {
     }
   }
 
-  // The editor group diffs and opened files should land in — always one
-  // other than the chat panel's own, so opening a diff never buries the
-  // chat behind it. The chat opens Beside (normally column Two), so edits
-  // go to the main group (column One); if the chat itself ended up in
-  // column One (opened with no editor showing), push them to column Two.
-  // A hidden panel reports viewColumn undefined — treat that as "not
-  // column One" and default to the main group.
+  // Where diffs and opened files land. Now that the chat lives in the
+  // Activity Bar rather than an editor group, there is no group to avoid:
+  // the active one is exactly where the user is looking, and opening there
+  // can no longer bury the conversation.
   private diffColumn(): vscode.ViewColumn {
-    return this.panel.viewColumn === vscode.ViewColumn.One
-      ? vscode.ViewColumn.Two
-      : vscode.ViewColumn.One;
+    return vscode.ViewColumn.Active;
   }
 
   // A selection auto-pins itself as a chip; a same-file selection replaces
@@ -256,7 +266,25 @@ export class ChatPanel {
     return label === this.lastAutoAttachedLabel ? null : label;
   }
 
-  private send(text: string, post: (message: unknown) => void): void {
+  private send(
+    message: { text: string; files?: OutboundFile[]; queue?: boolean; inline?: boolean },
+    post: (message: unknown) => void,
+  ): void {
+    const { text, files } = message;
+    // A command the server applies inline (/clear, /compact, /reload, /goal)
+    // is matched against the WHOLE trimmed message. Appending the open file to
+    // it — which every other message gets — turns it into an ordinary prompt:
+    // the session isn't cleared, a full turn runs, and the webview (which
+    // rendered no bubble and set no busy state for it) shows a reply out of
+    // nowhere. It also must not consume the user's pinned attachments, which
+    // are for the message they are still composing.
+    if (message.inline) {
+      this.session.sendMessage(text).catch((err) => {
+        post({ command: 'sendError', message: err instanceof Error ? err.message : String(err) });
+      });
+      return;
+    }
+
     const attachments = [...this.pendingAttachments.values()];
     // Only fall back to auto-capturing the whole current file when the user
     // has pinned nothing explicit — an explicit selection/file reference means
@@ -281,9 +309,15 @@ export class ChatPanel {
       post({ command: 'contextAttached', labels: attachments.map((a) => a.label) });
     }
 
-    this.session.sendMessage(combineContext(attachments, text)).catch((err) => {
-      post({ command: 'sendError', message: err instanceof Error ? err.message : String(err) });
-    });
+    this.session
+      .sendMessage(
+        combineContext(attachments, text),
+        files?.map((f) => ({ name: f.name, dataUrl: f.dataUrl })),
+        message.queue,
+      )
+      .catch((err) => {
+        post({ command: 'sendError', message: err instanceof Error ? err.message : String(err) });
+      });
   }
 
   private async pickFile(post: (message: unknown) => void): Promise<void> {
