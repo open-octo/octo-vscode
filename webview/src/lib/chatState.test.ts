@@ -145,7 +145,34 @@ describe('ChatState history replay', () => {
     ]);
   });
 
-  it('strips embedded selection/file context out of a replayed user message, showing only what was typed', () => {
+  it('strips the XML context off a replayed user message, showing only what was typed', () => {
+    const state = new ChatState();
+    state.handleHostMessage({ command: 'hostInfo', workspace: 'repo', workspaceRoot: '/repo' });
+    const rawContent =
+      'What does this do?\n\n' +
+      '<current_file>\n/repo/src/foo.ts\n</current_file>\n\n' +
+      '<context_files>\n/repo/src/bar.ts\n/elsewhere/baz.ts\n</context_files>\n\n' +
+      '<editor_selection path="/repo/src/foo.ts" lines="12-34">\n```ts\nconst x = 1\n```\n</editor_selection>';
+
+    state.handleHostMessage({
+      command: 'history',
+      sessionId: 's1',
+      events: [{ type: 'history_user_message', content: rawContent }],
+    });
+
+    // Paths go to the agent absolute (it reads them with its own tools); the
+    // transcript shows them the way the composer's chips did, and anything
+    // outside the workspace stays absolute because that is what it is.
+    expect(state.blocks).toEqual([
+      {
+        kind: 'user',
+        text: 'What does this do?',
+        attachments: ['src/foo.ts', 'src/bar.ts', '/elsewhere/baz.ts', 'src/foo.ts:12-34'],
+      },
+    ]);
+  });
+
+  it('still reads the pre-path format, where whole files were pasted in', () => {
     const state = new ChatState();
     const rawContent =
       'Selected code (src/foo.ts:12-34):\n```ts\nconst x = 1\n```\n' +

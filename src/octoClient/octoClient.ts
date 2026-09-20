@@ -463,6 +463,21 @@ export class OctoClient {
   }
 }
 
+/**
+ * Whether a session's name is octo's own "not titled yet" stand-in rather
+ * than something to show the user. Mirrors agent.IsAutoNamePlaceholder
+ * verbatim: empty, the literal "*Octo Agent" the server stamps on a session
+ * with no turns, or the web frontend's "Session N".
+ *
+ * The server hands these out as `name`, so a client that prints it verbatim
+ * puts "*Octo Agent" in its title bar until the first turn finishes and the
+ * real auto-title arrives.
+ */
+export function isPlaceholderName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed === '' || trimmed === '*Octo Agent' || /^Session \d+$/.test(trimmed);
+}
+
 function normalizeSession(record: Record<string, unknown>): OctoSession {
   return {
     id: String(record.id ?? ''),

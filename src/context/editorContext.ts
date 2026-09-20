@@ -1,11 +1,35 @@
 import * as vscode from 'vscode';
 
+/**
+ * One piece of editor context riding along with a message.
+ *
+ * A whole file is referenced BY PATH, never by content: the session's octo
+ * project mounts the workspace, so the agent reads what it needs with its own
+ * tools, and pasting a file into every prompt just burns the context window on
+ * text the agent may not even need. A selection is the exception — the
+ * selected lines ARE the message, and no path can express "these ones".
+ *
+ * The same split the obsidian client makes (<linked_note> / <context_files>
+ * carry paths; <editor_selection> carries text).
+ */
+export type AttachmentKind = 'current' | 'file' | 'selection';
+
 export interface CapturedAttachment {
+  /** Workspace-relative — for the composer chip and the transcript, never for
+   * the agent. */
   label: string;
-  block: string;
+  kind: AttachmentKind;
+  /** Absolute. A project's working directory is octo's own generated
+   * workspace and the repository is mounted into it, so a relative path
+   * leaves the model searching the filesystem for the file. */
+  path: string;
+  /** 'selection' only: the selected text and any diagnostics over it. */
+  block?: string;
 }
 
-const MAX_FILE_BYTES = 100_000;
+/** Caps a selection — the one thing here that still carries text. Someone can
+ * always select a whole generated file. */
+const MAX_SELECTION_BYTES = 100_000;
 
 // vscode.window.activeTextEditor goes undefined the instant focus moves to
 // any non-editor UI — including the chat view's own composer, which is
@@ -75,15 +99,19 @@ export function captureSelection(): CapturedAttachment | null {
       .getDiagnostics(document.uri)
       .filter((d) => d.range.intersection(selection) !== undefined);
 
-    let block = `Selected code (${label}):\n\`\`\`${document.languageId}\n${document.getText(selection)}\n\`\`\``;
+    const selected = document.getText(selection);
+    const text = selected.length > MAX_SELECTION_BYTES ? `${selected.slice(0, MAX_SELECTION_BYTES)}\n… (truncated)` : selected;
+    const lineAttr = label.includes(':') ? ` lines="${label.slice(label.indexOf(':') + 1)}"` : '';
+    let block = `<editor_selection path="${document.uri.fsPath}"${lineAttr}>\n\`\`\`${document.languageId}\n${text}\n\`\`\``;
     if (diagnostics.length) {
       const lines = diagnostics.map(
         (d) => `- ${severityLabel(d.severity)}: ${d.message} (line ${d.range.start.line + 1})`,
       );
       block += `\nDiagnostics in this range:\n${lines.join('\n')}`;
     }
+    block += '\n</editor_selection>';
 
-    return { label, block };
+    return { label, kind: 'selection', path: document.uri.fsPath, block };
   } catch {
     return null;
   }
@@ -106,34 +134,46 @@ export function captureEditorContext(): CapturedAttachment | null {
     if (!editor) return null;
 
     const document = editor.document;
-    const relativePath = vscode.workspace.asRelativePath(document.uri, false);
-    const truncated = document.getText().length > MAX_FILE_BYTES;
-    const text = truncated ? document.getText().slice(0, MAX_FILE_BYTES) : document.getText();
-    const block = `Current file (${relativePath}):\n\`\`\`${document.languageId}\n${text}${truncated ? '\n… (truncated)' : ''}\n\`\`\``;
-    return { label: relativePath, block };
+    return {
+      label: vscode.workspace.asRelativePath(document.uri, false),
+      kind: 'current',
+      path: document.uri.fsPath,
+    };
   } catch {
     return null;
   }
 }
 
 /**
- * Reads a workspace file for attachment, truncating past MAX_FILE_BYTES so
- * a large binary-ish or generated file can't blow up the turn's context.
+ * References a workspace file for attachment. Nothing is read: the agent has
+ * the file mounted and its own tools to read it with, and a path costs a line
+ * of context instead of a whole file.
  */
-export async function readFileAttachment(uri: vscode.Uri): Promise<CapturedAttachment> {
-  const relativePath = vscode.workspace.asRelativePath(uri, false);
-  const bytes = await vscode.workspace.fs.readFile(uri);
-  const truncated = bytes.byteLength > MAX_FILE_BYTES;
-  const text = new TextDecoder('utf-8').decode(truncated ? bytes.slice(0, MAX_FILE_BYTES) : bytes);
-  const languageId = languageIdForPath(relativePath);
-
-  const block = `Attached file: ${relativePath}\n\`\`\`${languageId}\n${text}${truncated ? '\n… (truncated)' : ''}\n\`\`\``;
-  return { label: relativePath, block };
+export function fileAttachment(uri: vscode.Uri): CapturedAttachment {
+  return { label: vscode.workspace.asRelativePath(uri, false), kind: 'file', path: uri.fsPath };
 }
 
+/**
+ * Builds the prompt: what the user typed, then the context after it, in XML
+ * blocks the agent can tell apart from the message. Paths are absolute
+ * throughout — see CapturedAttachment.path.
+ */
 export function combineContext(attachments: CapturedAttachment[], text: string): string {
   if (!attachments.length) return text;
-  return `${attachments.map((a) => a.block).join('\n\n')}\n\n---\n\n${text}`;
+
+  const parts: string[] = [];
+  const current = attachments.find((a) => a.kind === 'current');
+  if (current) {
+    parts.push(`<current_file>\n${current.path}\n</current_file>`);
+  }
+  const files = attachments.filter((a) => a.kind === 'file');
+  if (files.length) {
+    parts.push(`<context_files>\n${files.map((a) => a.path).join('\n')}\n</context_files>`);
+  }
+  for (const selection of attachments) {
+    if (selection.kind === 'selection' && selection.block) parts.push(selection.block);
+  }
+  return [text, ...parts].join('\n\n');
 }
 
 const FILE_PICKER_EXCLUDE = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/build/**}';
@@ -169,25 +209,3 @@ function severityLabel(severity: vscode.DiagnosticSeverity): string {
 // Best-effort fence language from the file extension — good enough for
 // syntax-highlighting a pasted snippet, not a substitute for VS Code's own
 // language detection (which needs the file actually open in an editor).
-function languageIdForPath(path: string): string {
-  const ext = path.split('.').pop()?.toLowerCase() ?? '';
-  const known: Record<string, string> = {
-    ts: 'typescript',
-    tsx: 'tsx',
-    js: 'javascript',
-    jsx: 'jsx',
-    go: 'go',
-    py: 'python',
-    rb: 'ruby',
-    rs: 'rust',
-    java: 'java',
-    json: 'json',
-    yaml: 'yaml',
-    yml: 'yaml',
-    md: 'markdown',
-    sh: 'bash',
-    css: 'css',
-    html: 'html',
-  };
-  return known[ext] ?? '';
-}

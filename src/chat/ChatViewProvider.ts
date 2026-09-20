@@ -5,16 +5,25 @@ import * as vscode from 'vscode';
 import { ChatSessionManager } from './ChatSessionManager';
 import { ConnectionController } from '../connection/ConnectionController';
 import { openDiffFromWebview, openEditDiffPreview, openEditDiffResult, openFileAtPath } from '../context/diffView';
-import type { AskAnswer, AskOutcome, OctoEvent } from '../octoClient/octoClient';
+import { isPlaceholderName, type AskAnswer, type AskOutcome, type OctoEvent } from '../octoClient/octoClient';
 import {
   captureEditorContext,
   captureSelection,
   combineContext,
   currentEditorLabel,
+  fileAttachment,
   pickWorkspaceFile,
-  readFileAttachment,
   type CapturedAttachment,
 } from '../context/editorContext';
+
+/** The folder open in VS Code, named the way the user knows it. This is the
+ * directory mounted into the session's octo project — not the session's own
+ * working_dir, which is octo's generated workspace. */
+function workspaceLabel(): string | null {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders?.length) return null;
+  return vscode.workspace.name || folders[0].uri.fsPath.split('/').filter(Boolean).at(-1) || null;
+}
 
 /** An image pasted into the composer (webview protocol.ts's OutboundFile). */
 type OutboundFile = { name: string; dataUrl: string };
@@ -40,11 +49,32 @@ type InboundMessage =
   | { command: 'openFile'; path: string }
   | { command: 'viewDiff'; diff: string; path?: string };
 
+/** Where the chat view is contributed. The Secondary Side Bar (right) is the
+ * home: the session list owns the Activity Bar container on the left, and a
+ * conversation beside the code — rather than stacked under a list — is the
+ * layout VS Code's own chat and Claude Code both settled on.
+ *
+ * `secondarySidebar` as a viewsContainers target arrived in VS Code 1.106
+ * (Claude Code gates its own fallback on exactly that version). Older hosts,
+ * and forks that haven't picked it up, silently ignore the container — so the
+ * same view is contributed a second time under the Activity Bar container,
+ * and the two `when` clauses on octo.noSecondarySidebar keep exactly one of
+ * them alive. */
+export const CHAT_VIEW_ID = 'octo.chatView';
+export const CHAT_FALLBACK_VIEW_ID = 'octo.chatViewSidebar';
+const SECONDARY_SIDEBAR_SINCE = { major: 1, minor: 106 };
+
+/** Whether this host can hold a view container in the Secondary Side Bar. */
+export function supportsSecondarySidebar(version = vscode.version): boolean {
+  const [major, minor] = version.split('.').map((part) => Number.parseInt(part, 10));
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return false;
+  return major > SECONDARY_SIDEBAR_SINCE.major || (major === SECONDARY_SIDEBAR_SINCE.major && minor >= SECONDARY_SIDEBAR_SINCE.minor);
+}
+
 /**
- * The chat surface: a WebviewView living in the Activity Bar container next
- * to the session list, the way VS Code's own chat sits. It used to be a
- * WebviewPanel opened Beside the editor, which cost an editor tab to hold a
- * conversation and put the chat in competition with the code it was about.
+ * The chat surface: a WebviewView in the Secondary Side Bar (see
+ * CHAT_VIEW_ID). It used to be a WebviewPanel opened Beside the editor, which
+ * cost an editor tab to hold a conversation.
  *
  * VS Code owns this view's lifecycle: it constructs the webview on first
  * reveal and may tear it down and call resolveWebviewView again after the
@@ -54,8 +84,6 @@ type InboundMessage =
  * getState/setState, which is exactly what it's for).
  */
 export class ChatViewProvider implements vscode.WebviewViewProvider {
-  static readonly viewType = 'octo.chatView';
-
   // Keyed by label (the relative path) so re-picking the same file just
   // refreshes its content rather than duplicating a chip.
   private readonly pendingAttachments = new Map<string, CapturedAttachment>();
@@ -70,9 +98,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Brings the chat view into focus, resolving it if VS Code has not built
    * it yet. `.focus` is contributed for every view id; awaiting it is what
-   * guarantees resolveWebviewView has run before the caller posts anything. */
+   * guarantees resolveWebviewView has run before the caller posts anything.
+   * Only one of the two contributed views exists on a given host, so the
+   * command for the other one isn't registered — hence the version check
+   * rather than trying both. */
   static async reveal(): Promise<void> {
-    await vscode.commands.executeCommand(`${ChatViewProvider.viewType}.focus`);
+    const viewId = supportsSecondarySidebar() ? CHAT_VIEW_ID : CHAT_FALLBACK_VIEW_ID;
+    await vscode.commands.executeCommand(`${viewId}.focus`);
   }
 
   constructor(
@@ -82,6 +114,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
+    // VS Code rebuilds a long-hidden view, and the same instance backs both
+    // contributed ids — neither may leave the previous wiring behind.
+    this.dispose();
     const webviewRoot = vscode.Uri.joinPath(this.extensionUri, 'dist', 'webview');
     view.webview.options = { enableScripts: true, localResourceRoots: [webviewRoot] };
     view.webview.html = this.buildHtml(view.webview, webviewRoot);
@@ -113,7 +148,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       // for the rest of the conversation.
       this.controller.onEvent(({ event }) => {
         if (event.type === 'session_renamed' && event.session_id === this.session.getSessionId()) {
-          post({ command: 'sessionInfo', sessionId: event.session_id, name: event.name });
+          post({
+            command: 'sessionInfo',
+            sessionId: event.session_id,
+            name: isPlaceholderName(event.name) ? '' : event.name,
+          });
         }
       }),
       view.webview.onDidReceiveMessage((message: InboundMessage) => this.handleMessage(message, post)),
@@ -169,6 +208,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         // load, so this handshake — the first moment it is provably listening
         // — is where anything it can't ask for again is (re)sent.
         void this.postSkills(post);
+        post({
+          command: 'hostInfo',
+          workspace: workspaceLabel(),
+          workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null,
+        });
         // A freshly (re)built webview starts empty; replay the active
         // session's history, which also re-sends the header's session info.
         void this.session.replayCurrentHistory();
@@ -323,13 +367,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async pickFile(post: (message: unknown) => void): Promise<void> {
     const uri = await pickWorkspaceFile();
     if (!uri) return;
-    try {
-      const attachment = await readFileAttachment(uri);
-      this.pendingAttachments.set(attachment.label, attachment);
-      post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
-    } catch (err) {
-      post({ command: 'sendError', message: `Failed to read file: ${err instanceof Error ? err.message : String(err)}` });
-    }
+    const attachment = fileAttachment(uri);
+    this.pendingAttachments.set(attachment.label, attachment);
+    post({ command: 'attachments', labels: [...this.pendingAttachments.keys()] });
   }
 
   private buildHtml(webview: vscode.Webview, webviewRoot: vscode.Uri): string {
