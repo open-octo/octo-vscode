@@ -85,14 +85,14 @@
       "activitybar": [
         {
           "id": "octo",
-          "title": "octo",
+          "title": "Octo",
           "icon": "resources/icon.svg"
         }
       ],
       "secondarySidebar": [
         {
           "id": "octo-chat",
-          "title": "octo",
+          "title": "Octo",
           "icon": "resources/icon.svg",
           "when": "!octo.noSecondarySidebar"
         }
