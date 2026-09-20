@@ -8,7 +8,7 @@ export interface CapturedAttachment {
 const MAX_FILE_BYTES = 100_000;
 
 // vscode.window.activeTextEditor goes undefined the instant focus moves to
-// any non-editor UI — including the chat panel's own composer, which is
+// any non-editor UI — including the chat view's own composer, which is
 // exactly when captureEditorContext() needs to know what the user was just
 // looking at (its "or, when none has focus, the one that has changed input
 // most recently" doc claim does not hold in practice once a webview has

@@ -3,6 +3,9 @@
   import ConfirmModal from './components/ConfirmModal.svelte';
   import MessageList from './components/MessageList.svelte';
   import QuestionModal from './components/QuestionModal.svelte';
+  import SessionHeader from './components/SessionHeader.svelte';
+  import ThinkingBlock from './components/ThinkingBlock.svelte';
+  import TodoPanel from './components/TodoPanel.svelte';
   import { chatState } from './lib/chatState.svelte';
 
   const connectionLabel = $derived(
@@ -16,6 +19,8 @@
 </script>
 
 <div class="app">
+  <SessionHeader session={chatState.session} busy={chatState.busy} />
+
   {#if connectionLabel}
     <div class="banner" class:error={chatState.connectionState === 'failed'}>{connectionLabel}</div>
   {/if}
@@ -23,20 +28,31 @@
   <MessageList blocks={chatState.blocks} onOpenFile={(path) => chatState.openFile(path)} />
 
   {#if chatState.thinking}
-    <div class="status-line">Thinking…</div>
+    <!-- The round currently streaming: shown live, then handed to the
+         assistant block it belongs to once the reply starts. -->
+    <div class="live-think"><ThinkingBlock text={chatState.thinking} live /></div>
   {:else if chatState.status}
     <div class="status-line">{chatState.status}</div>
+  {/if}
+  {#if chatState.toast}
+    <!-- The inline slash commands (/clear, /compact, /reload, /goal) report
+         through nothing else — this line is their entire output. -->
+    <div class="status-line" class:error={chatState.toast.level === 'error'}>{chatState.toast.message}</div>
   {/if}
   {#if chatState.sendError}
     <div class="status-line error">{chatState.sendError}</div>
   {/if}
 
+  <TodoPanel todos={chatState.todos} />
+
   <Composer
     disabled={chatState.connectionState !== 'connected'}
     busy={chatState.busy}
+    queuedCount={chatState.queuedCount}
     pendingAttachments={chatState.pendingAttachments}
     activeFile={chatState.activeFile}
-    onSend={(text) => chatState.sendMessage(text)}
+    skills={chatState.skills}
+    onSend={(text, files) => chatState.sendMessage(text, files)}
     onInterrupt={() => chatState.interrupt()}
     onPickFile={() => chatState.pickFile()}
     onRemoveAttachment={(label) => chatState.removeAttachment(label)}
@@ -86,5 +102,9 @@
   }
   .status-line.error {
     color: var(--vscode-errorForeground);
+  }
+  .live-think {
+    flex-shrink: 0;
+    padding: 2px 12px;
   }
 </style>

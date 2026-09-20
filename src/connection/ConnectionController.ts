@@ -1,6 +1,15 @@
 import * as vscode from 'vscode';
 
-import { AskAnswer, AskOutcome, OctoClient, OctoEvent, OctoSession, OctoUserFile } from '../octoClient/octoClient';
+import {
+  AskAnswer,
+  AskOutcome,
+  OctoClient,
+  OctoEvent,
+  OctoSession,
+  OctoSessionGroup,
+  OctoSkill,
+  OctoUserFile,
+} from '../octoClient/octoClient';
 import { ensureServerRunning } from '../octoClient/serverLauncher';
 
 export interface OctoConfig {
@@ -137,12 +146,28 @@ export class ConnectionController {
     this.requireClient().unsubscribe(sessionId);
   }
 
-  async createSession(opts: { name?: string; workingDir?: string }): Promise<OctoSession> {
+  async createSession(opts: { name?: string; groupId?: string }): Promise<OctoSession> {
     return this.requireClient().createSession(opts);
   }
 
   async listSessions(): Promise<OctoSession[]> {
     return this.requireClient().listSessions();
+  }
+
+  async listSessionGroups(): Promise<OctoSessionGroup[]> {
+    return this.requireClient().listSessionGroups();
+  }
+
+  async createSessionGroup(name: string, sourceDirs: string[]): Promise<OctoSessionGroup> {
+    return this.requireClient().createSessionGroup(name, sourceDirs);
+  }
+
+  async renameSession(sessionId: string, name: string): Promise<void> {
+    return this.requireClient().renameSession(sessionId, name);
+  }
+
+  async listSkills(): Promise<OctoSkill[]> {
+    return this.requireClient().listSkills();
   }
 
   async getSessionMessages(sessionId: string): Promise<OctoEvent[]> {

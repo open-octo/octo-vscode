@@ -1,6 +1,22 @@
+import { inlineSlashCommand, type SlashItem } from './inlineSlash';
 import { postToHost } from './vscodeApi';
 import type { AskAnswerPayload, AskOutcome } from './askStepper';
-import type { ConnectionState, InboundHostMessage, OctoEvent, UIPayload } from './protocol';
+import type { ConnectionState, InboundHostMessage, OctoEvent, OutboundFile, UIPayload } from './protocol';
+
+/** One line of the agent's task checklist (tasks.go's taskUI). */
+export type Todo = { content: string; status: string };
+
+/** What the header shows about the open session. Every field arrives from the
+ * server's session_update except the name, which the host supplies. */
+export type SessionInfo = {
+  name: string;
+  /** 0-100. */
+  contextUsage: number | null;
+  permissionMode: string | null;
+  /** The session's working directory — its PROJECT's generated workspace, not
+   * the folder open in VS Code (that is mounted as a source folder). */
+  workingDir: string | null;
+};
 
 export type ToolBlock = {
   kind: 'tool';
@@ -24,7 +40,7 @@ export type TextBlock = {
   thinking?: string;
   // Selection/file context attached to this turn — set on 'user' blocks
   // once the host reports back what it actually attached (see
-  // ChatPanel.send). Never set for 'assistant'.
+  // ChatViewProvider.send). Never set for 'assistant'.
   attachments?: string[];
 };
 
@@ -75,6 +91,20 @@ export class ChatState {
   // The active editor file/selection the host will auto-attach on send,
   // shown as a live indicator in the composer. null when no editor is focused.
   activeFile: string | null = $state(null);
+  // The agent's current task checklist. Fed by todo_update live and by the
+  // todo tool_result's ui_payload on replay, so it survives a session switch.
+  todos: Todo[] = $state([]);
+  session: SessionInfo = $state({ name: '', contextUsage: null, permissionMode: null, workingDir: null });
+  // The server's transient notices (wsToast). The inline slash commands
+  // report through nothing else, so this is not decoration.
+  toast: { message: string; level: string } | null = $state(null);
+  // Installed skills, for the composer's "/" menu. Built-ins are static (see
+  // inlineSlash.ts); these come from the host's GET /api/skills.
+  skills: SlashItem[] = $state([]);
+  // Messages typed while a turn was running, sent in order as it finishes.
+  // Their bubbles are already in the transcript — this holds only what still
+  // has to go on the wire. Reactive because the composer shows its depth.
+  private queue: { text: string; files?: OutboundFile[] }[] = $state([]);
 
   // Correlates tool_result/tool_error/tool_stdout back to their tool_call by
   // tool_id — the only reliable pairing, since these events carry no
@@ -102,12 +132,23 @@ export class ChatState {
         this.activeFile = message.label;
         break;
       case 'contextAttached': {
+        // Merged, not assigned: a message can carry both pasted images (named
+        // by sendMessage) and the host's editor context, and each only knows
+        // about its own half.
         const lastUser = this.lastUserBlock();
-        if (lastUser && message.labels.length) lastUser.attachments = message.labels;
+        if (lastUser && message.labels.length) {
+          lastUser.attachments = [...new Set([...(lastUser.attachments ?? []), ...message.labels])];
+        }
         break;
       }
       case 'history':
         this.loadHistory(message.events);
+        break;
+      case 'sessionInfo':
+        this.session.name = message.name;
+        break;
+      case 'skills':
+        this.skills = message.skills.map((s) => ({ ...s, builtin: false }));
         break;
     }
   }
@@ -129,6 +170,14 @@ export class ChatState {
     this.sendError = null;
     this.pendingConfirmation = null;
     this.pendingQuestion = null;
+    this.toast = null;
+    this.todos = [];
+    this.queue = [];
+    // Name aside (the host sends it alongside this history), the session's
+    // own fields are re-announced by the session_update that follows a
+    // subscribe — blank them so a switch never shows the last session's
+    // context usage against this one's transcript.
+    this.session = { name: this.session.name, contextUsage: null, permissionMode: null, workingDir: null };
     for (const event of events) {
       if (event.type === 'history_user_message') {
         const { text, attachments } = splitContextFromMessage(event.content);
@@ -139,17 +188,51 @@ export class ChatState {
     }
   }
 
-  sendMessage(text: string): void {
+  sendMessage(text: string, files?: OutboundFile[]): void {
     const trimmed = text.trim();
-    if (!trimmed || this.busy) return;
+    if (!trimmed && !files?.length) return;
+
+    const inline = inlineSlashCommand(trimmed, !!files?.length);
+    if (inline) {
+      // No bubble and no busy state: the server answers an inline command with
+      // a toast (and, for /clear and /compact, a history_reload), never with a
+      // turn — so a bubble would describe a message the session doesn't hold,
+      // and busy would wait on a `complete` that never comes.
+      this.sendError = null;
+      this.toast = null;
+      postToHost({ command: 'send', text: trimmed });
+      return;
+    }
+
     // Rendered optimistically rather than on the server's history_user_message
-    // echo: this UI never lets a second send through while busy, so there's
-    // no steer/interleaving case that needs the echo to disambiguate ordering.
-    this.blocks.push({ kind: 'user', text: trimmed });
-    this.busy = true;
+    // echo — the echo carries the host's appended editor context too, which is
+    // not what the user typed.
+    this.blocks.push({ kind: 'user', text: trimmed, attachments: files?.map((f) => f.name) });
     this.sendError = null;
     this.status = null;
-    postToHost({ command: 'send', text: trimmed });
+    this.toast = null;
+    if (this.busy) {
+      // Queued rather than dropped: a message typed mid-turn is a follow-up
+      // the user has already committed to, and silently discarding it is the
+      // worse failure. It goes on the wire in order once the turn completes.
+      this.queue.push({ text: trimmed, files });
+      return;
+    }
+    this.busy = true;
+    postToHost({ command: 'send', text: trimmed, files });
+  }
+
+  /** Whether anything is waiting behind the running turn — the composer shows
+   * a count so a queued message doesn't look lost. */
+  get queuedCount(): number {
+    return this.queue.length;
+  }
+
+  private flushQueue(): void {
+    const next = this.queue.shift();
+    if (!next) return;
+    this.busy = true;
+    postToHost({ command: 'send', text: next.text, files: next.files });
   }
 
   interrupt(): void {
@@ -239,6 +322,10 @@ export class ChatState {
           tool.result = event.result;
           tool.uiPayload = event.ui_payload;
         }
+        // The standalone todo_update rides alongside this only on the live
+        // stream; on replay the ui_payload is the checklist's only carrier, so
+        // the panel has to read it from here too.
+        if (event.ui_payload?.type === 'todo') this.todos = event.ui_payload.todos;
         break;
       }
       case 'tool_error': {
@@ -257,9 +344,31 @@ export class ChatState {
         // event actually carries — those only set progress_type.
         this.status = event.progress_type === 'thinking' ? 'Thinking…' : event.message ?? null;
         break;
+      case 'todo_update':
+        // An empty list is meaningful, not a no-op: /clear broadcasts one to
+        // retire the panel over the wiped transcript.
+        this.todos = event.todos;
+        break;
+      case 'session_update':
+        if (typeof event.context_usage === 'number') this.session.contextUsage = event.context_usage;
+        if (event.permission_mode) this.session.permissionMode = event.permission_mode;
+        if (event.working_dir) this.session.workingDir = event.working_dir;
+        break;
+      case 'toast':
+        this.toast = { message: event.message, level: event.level ?? 'info' };
+        break;
+      case 'send_rejected':
+      case 'bind_required':
+        // Terminal for this message: nothing else follows, so release the
+        // composer here or it waits on a `complete` that never comes.
+        this.busy = false;
+        this.status = null;
+        this.sendError = event.message;
+        break;
       case 'complete':
         this.busy = false;
         this.status = null;
+        this.flushQueue();
         break;
       case 'request_confirmation':
         this.pendingConfirmation = event;

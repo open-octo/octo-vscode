@@ -1,7 +1,7 @@
 {
   "name": "octo-agent",
   "displayName": "Octo Agent",
-  "description": "octo agent in your editor — connects to a local octo serve",
+  "description": "octo agent in your editor \u2014 connects to a local octo serve",
   "version": "0.2.0",
   "publisher": "open-octo",
   "license": "MIT",
@@ -66,9 +66,19 @@
         "icon": "$(add)"
       },
       {
+        "command": "octo.renameSession",
+        "title": "octo: Rename Session",
+        "icon": "$(edit)"
+      },
+      {
         "command": "octo.deleteSession",
         "title": "octo: Delete Session",
         "icon": "$(trash)"
+      },
+      {
+        "command": "octo.refreshSessions",
+        "title": "octo: Refresh Sessions",
+        "icon": "$(refresh)"
       }
     ],
     "viewsContainers": {
@@ -84,7 +94,13 @@
       "octo": [
         {
           "id": "octo.sessionsView",
-          "name": "Sessions"
+          "name": "Sessions",
+          "visibility": "collapsed"
+        },
+        {
+          "id": "octo.chatView",
+          "name": "Chat",
+          "type": "webview"
         }
       ]
     },
@@ -99,14 +115,29 @@
         {
           "command": "octo.newSession",
           "when": "view == octo.sessionsView",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "octo.refreshSessions",
+          "when": "view == octo.sessionsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "octo.newSession",
+          "when": "view == octo.chatView",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
         {
+          "command": "octo.renameSession",
+          "when": "view == octo.sessionsView && viewItem == octoSession",
+          "group": "inline@1"
+        },
+        {
           "command": "octo.deleteSession",
-          "when": "view == octo.sessionsView",
-          "group": "inline"
+          "when": "view == octo.sessionsView && viewItem == octoSession",
+          "group": "inline@2"
         }
       ]
     }

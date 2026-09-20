@@ -1,5 +1,6 @@
 <script lang="ts">
   import { renderMarkdown, setupCopyButtons } from '../lib/markdown';
+  import ThinkingBlock from './ThinkingBlock.svelte';
   import ToolCall from './ToolCall.svelte';
   import type { Block } from '../lib/chatState.svelte';
 
@@ -46,6 +47,9 @@
           </div>
         {/if}
         {#if block.kind === 'assistant'}
+          {#if block.thinking}
+            <ThinkingBlock text={block.thinking} />
+          {/if}
           <div class="md-content" use:copyButtons>{@html renderMarkdown(block.text)}</div>
         {:else}
           {block.text}

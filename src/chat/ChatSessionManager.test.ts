@@ -1,8 +1,22 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as vscode from 'vscode';
 
 import { ChatSessionManager } from './ChatSessionManager';
 import type { ConnectionController } from '../connection/ConnectionController';
-import type { OctoEvent } from '../octoClient/octoClient';
+import type { OctoEvent, OctoSessionGroup } from '../octoClient/octoClient';
+
+// The mocked `vscode` module's workspace is a plain mutable object (see
+// test/vitest.setup.ts) — tests that need a workspace open write to it here.
+const workspace = vscode.workspace as { workspaceFolders?: unknown; name?: string };
+
+function openWorkspace(...paths: string[]): void {
+  workspace.workspaceFolders = paths.map((p) => ({ uri: { fsPath: p } }));
+}
+
+afterEach(() => {
+  workspace.workspaceFolders = undefined;
+  workspace.name = undefined;
+});
 
 // Duck-typed fake covering exactly the ConnectionController surface
 // ChatSessionManager calls, with a call log so ordering can be asserted —
@@ -25,13 +39,22 @@ function fakeController(events: unknown[] = []) {
       calls.push(`getSessionMessages:${id}`);
       return events;
     }),
-    createSession: vi.fn(async () => {
-      calls.push('createSession');
+    createSession: vi.fn(async (opts?: { groupId?: string }) => {
+      calls.push(`createSession:${opts?.groupId ?? 'no-group'}`);
       // Empty name mirrors what the server returns for a placeholder session
       // (see createAndBindSession: no name is sent so octo can auto-title).
       return { id: 'new-session', name: '' };
     }),
     listSessions: vi.fn(async () => []),
+    listSessionGroups: vi.fn(async (): Promise<OctoSessionGroup[]> => {
+      calls.push('listSessionGroups');
+      return [];
+    }),
+    createSessionGroup: vi.fn(async (name: string, sourceDirs: string[]): Promise<OctoSessionGroup> => {
+      calls.push(`createSessionGroup:${name}:${sourceDirs.join(',')}`);
+      return { id: 'group-new', name, sourceDirs, sessionIds: [] };
+    }),
+    renameSession: vi.fn(async () => {}),
     deleteSession: vi.fn(async (id: string) => {
       calls.push(`deleteSession:${id}`);
     }),
@@ -120,7 +143,7 @@ describe('ChatSessionManager.switchToSession', () => {
     releaseReady();
     await pending;
 
-    expect(calls).toEqual(['createSession', 'subscribe:new-session']);
+    expect(calls).toEqual(['createSession:no-group', 'subscribe:new-session']);
   });
 
   it('creates sessions without a hardcoded name so octo can auto-generate the title', async () => {
@@ -226,5 +249,92 @@ describe('ChatSessionManager.deleteSession', () => {
     fireEvent({ sessionId: 'session-2', event: { type: 'session_deleted', session_id: 'session-2' } });
 
     expect(manager.getSessionId()).toBe('session-1');
+  });
+});
+
+describe('ChatSessionManager project binding', () => {
+  // A session's working directory comes from its project — PATCH
+  // /api/sessions/{id}/working_dir answers 409 unconditionally — and
+  // handleCreateSession only skips seeding a throwaway ~/Octo/tasks/<id>
+  // workspace when it can already see the membership. So group_id at creation
+  // time is the only thing that puts a session in the workspace.
+  it('files a new session under the project that already mounts this workspace', async () => {
+    const { controller, calls } = fakeController();
+    controller.listSessionGroups = vi.fn(async () => [
+      { id: 'group-other', name: 'other', sourceDirs: ['/elsewhere'], sessionIds: [] },
+      { id: 'group-here', name: 'repo', sourceDirs: ['/repo/'], sessionIds: [] },
+    ]);
+    openWorkspace('/repo');
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await manager.startNewSession();
+
+    expect(calls).toContain('createSession:group-here');
+    expect(controller.createSessionGroup).not.toHaveBeenCalled();
+  });
+
+  it('creates the project, mounting every workspace folder, when none matches', async () => {
+    const { controller, calls } = fakeController();
+    openWorkspace('/repo', '/repo-docs');
+    workspace.name = 'repo (Workspace)';
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await manager.startNewSession();
+
+    expect(calls).toContain('createSessionGroup:repo (Workspace):/repo,/repo-docs');
+    expect(calls).toContain('createSession:group-new');
+  });
+
+  it('creates only one project when two sessions are started at once', async () => {
+    const { controller } = fakeController();
+    openWorkspace('/repo');
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await Promise.all([manager.startNewSession(), manager.startNewSession()]);
+
+    expect(controller.createSessionGroup).toHaveBeenCalledTimes(1);
+  });
+
+  it('still creates the session when the project cannot be resolved', async () => {
+    const { controller, calls } = fakeController();
+    controller.createSessionGroup = vi.fn().mockRejectedValue(new Error('bad source dir'));
+    openWorkspace('/repo');
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await manager.startNewSession();
+
+    // A loose session still chats — it just can't see the repository — which
+    // beats failing the click outright.
+    expect(calls).toContain('createSession:no-group');
+  });
+
+  it('lists the project members, newest first, not sessions matching working_dir', async () => {
+    const { controller } = fakeController();
+    controller.listSessionGroups = vi.fn(async () => [
+      { id: 'group-here', name: 'repo', sourceDirs: ['/repo'], sessionIds: ['a', 'b'] },
+    ]);
+    controller.listSessions = vi.fn(async () => [
+      // Every session in a project reports the project's own generated
+      // workspace as working_dir — never the mounted folder — so the old
+      // working_dir filter matched nothing at all.
+      { id: 'a', name: 'older', workingDir: '/octo/workspaces/repo', updatedAt: '2026-09-01T00:00:00Z' },
+      { id: 'b', name: 'newer', workingDir: '/octo/workspaces/repo', updatedAt: '2026-09-19T00:00:00Z' },
+      { id: 'c', name: 'someone else', workingDir: '/octo/workspaces/other' },
+    ]);
+    openWorkspace('/repo');
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    const sessions = await manager.listWorkspaceSessions();
+
+    expect(sessions.map((s) => s.id)).toEqual(['b', 'a']);
+  });
+
+  it('does not create a project just to list sessions', async () => {
+    const { controller } = fakeController();
+    openWorkspace('/repo');
+    const manager = new ChatSessionManager(controller, fakeMemento());
+
+    await expect(manager.listWorkspaceSessions()).resolves.toEqual([]);
+    expect(controller.createSessionGroup).not.toHaveBeenCalled();
   });
 });

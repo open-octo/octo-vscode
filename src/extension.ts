@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 
-import { ChatPanel } from './chat/ChatPanel';
 import { ChatSessionManager } from './chat/ChatSessionManager';
+import { ChatViewProvider } from './chat/ChatViewProvider';
 import { SessionListProvider, SessionTreeItem } from './chat/SessionListProvider';
 import { ConnectionController } from './connection/ConnectionController';
 import { registerDiffContentProvider } from './context/diffView';
@@ -43,6 +43,18 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const sessionList = new SessionListProvider(session);
   context.subscriptions.push(vscode.window.registerTreeDataProvider('octo.sessionsView', sessionList));
+
+  // The chat itself: a view in the same Activity Bar container, below the
+  // session list. retainContextWhenHidden keeps the transcript and the
+  // composer's draft alive while the user is off in another view — VS Code
+  // otherwise rebuilds a long-hidden webview from scratch.
+  const chatView = new ChatViewProvider(context.extensionUri, controller, session);
+  context.subscriptions.push(chatView);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(ChatViewProvider.viewType, chatView, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+  );
   // The list's "current" marker and its contents both depend on state this
   // extension only learns asynchronously (session creation, history-driven
   // switches, the startup restore below) — refresh on every event/history
@@ -50,7 +62,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(session.onEvent(() => sessionList.refresh()));
   context.subscriptions.push(session.onHistoryLoaded(() => sessionList.refresh()));
   // session_deleted and session_renamed are both broadcast globally and can
-  // name a session other than whichever one is currently open in the panel
+  // name a session other than whichever one is currently open in the chat view
   // (session.onEvent above only fires for the active one) — listen on the raw
   // connection stream so a deletion or an auto-generated title from any
   // client, of any session, still updates the list. session_renamed is octo's
@@ -58,7 +70,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // the new name in place.
   context.subscriptions.push(
     controller.onEvent(({ event }) => {
-      if (event.type === 'session_deleted' || event.type === 'session_renamed') sessionList.refresh();
+      if (
+        event.type === 'session_deleted' ||
+        event.type === 'session_renamed' ||
+        // Any client creating a session in this workspace's project — including
+        // this extension's own octo.newSession — belongs in the list at once.
+        event.type === 'session_created'
+      ) {
+        sessionList.refresh();
+      }
     }),
   );
 
@@ -70,11 +90,40 @@ export function activate(context: vscode.ExtensionContext): void {
       controller.disconnect();
       void controller.connect();
     }),
-    vscode.commands.registerCommand('octo.newSession', () => {
-      void ChatPanel.openNew(context.extensionUri, controller, session);
+    vscode.commands.registerCommand('octo.newSession', async () => {
+      // Focus first: the reveal is what makes VS Code resolve the webview, so
+      // the new session's (empty) history has somewhere to land.
+      await ChatViewProvider.reveal();
+      // A genuine connection failure here was already reported once by
+      // ConnectionController.connect()'s own showErrorMessage, and the chat
+      // view's own banner reflects it too — swallow rather than surface a
+      // second, redundant notification.
+      await session.startNewSession().catch(() => undefined);
     }),
-    vscode.commands.registerCommand('octo.openSession', (sessionId: string) => {
-      void ChatPanel.openSession(context.extensionUri, controller, session, sessionId);
+    vscode.commands.registerCommand('octo.openSession', async (sessionId: string) => {
+      await ChatViewProvider.reveal();
+      if (sessionId !== session.getSessionId()) {
+        await session.switchToSession(sessionId).catch(() => undefined);
+      }
+    }),
+    vscode.commands.registerCommand('octo.refreshSessions', () => sessionList.refresh()),
+    vscode.commands.registerCommand('octo.renameSession', async (item: SessionTreeItem) => {
+      const name = await vscode.window.showInputBox({
+        title: 'Rename octo session',
+        value: item.session.name,
+        // Naming a session also stops octo auto-titling it later — worth
+        // saying, since the auto-title is what most sessions run on.
+        prompt: 'octo stops auto-naming a session once you name it yourself.',
+      });
+      if (name === undefined || !name.trim()) return;
+      try {
+        await session.renameSession(item.session.id, name.trim());
+        sessionList.refresh();
+      } catch (err) {
+        void vscode.window.showErrorMessage(
+          `octo: failed to rename session — ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }),
     vscode.commands.registerCommand('octo.deleteSession', async (item: SessionTreeItem) => {
       const label = item.session.name || 'Untitled';

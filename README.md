@@ -2,15 +2,20 @@
 
 Chat with [octo](https://github.com/open-octo/octo-agent) — the open-source, MIT-licensed, self-hosted AI coding agent — right inside VS Code.
 
-This extension is a thin client: it connects to a local `octo serve` process over WebSocket and REST. All the actual agent work (LLM calls, tool execution, session state) happens in `octo serve`; the extension just gives you a chat panel and session list in your editor.
+This extension is a thin client: it connects to a local `octo serve` process over WebSocket and REST. All the actual agent work (LLM calls, tool execution, session state) happens in `octo serve`; the extension just gives you the chat and your session list in your editor.
 
 ## Features
 
-- **Session list in the Activity Bar** — every octo session for the current workspace, with the active one marked.
-- **Chat panel beside your editor** — opens to the side (like a normal editor tab), not squeezed into the sidebar.
-- **Automatic context** — the file you currently have open (or your selection, plus any diagnostics on it) is attached to your next message automatically. Attach additional files with the `@ file` button.
+- **Chat in the sidebar** — the conversation lives in the octo Activity Bar container, next to the session list, so it never costs you an editor tab.
+- **Your workspace is the project** — the first session in a folder creates (or joins) an octo project that mounts it, so the agent's tools, memory and `.octorules` are scoped to the code you're actually looking at.
+- **Session list** — every session in this workspace's project, newest first, badged when one is waiting on you; rename or delete from the list.
+- **Session header** — which session you're in, how full its context window is, and what permission mode its tools run under.
+- **Task checklist** — the agent's plan, pinned above the composer and ticked off as it goes.
+- **Reasoning, folded away** — the thinking trace sits collapsed above the reply it belongs to.
+- **Slash commands** — type `/` for octo's built-ins (`/clear`, `/compact`, `/reload`, `/goal`, `/loop`) and your installed skills.
+- **Automatic context** — the file you currently have open (or your selection, plus any diagnostics on it) is attached to your next message automatically. Attach additional files with the attach button, or paste an image straight into the composer.
 - **Native diff view** — file edits the agent makes open in VS Code's own diff viewer, not a text dump in the chat.
-- **Permission and question prompts** — confirmations and clarifying questions from the agent show up as native-feeling modals in the panel.
+- **Permission and question prompts** — confirmations and clarifying questions from the agent show up as native-feeling modals.
 - **Auto-starts `octo serve`** — if nothing is listening on the configured host/port, the extension spawns `octo serve -d` for you.
 
 ## Requirements

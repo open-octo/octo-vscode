@@ -248,3 +248,118 @@ describe('ChatState question answers', () => {
     ]);
   });
 });
+
+describe('ChatState inline slash commands', () => {
+  it('sends an inline command without a bubble or a busy spinner', () => {
+    const state = new ChatState();
+
+    state.sendMessage('/clear');
+
+    // The server answers these before any turn starts — no
+    // history_user_message, no `complete`. A bubble would describe a message
+    // the session doesn't hold, and busy would never be released.
+    expect(state.blocks).toEqual([]);
+    expect(state.busy).toBe(false);
+  });
+
+  it('treats an inline command carrying files as an ordinary message', () => {
+    const state = new ChatState();
+
+    state.sendMessage('/clear', [{ name: 'shot.png', dataUrl: 'data:image/png;base64,AA' }]);
+
+    // Attachments take the message off the inline path server-side.
+    expect(state.busy).toBe(true);
+    expect(state.blocks).toHaveLength(1);
+  });
+
+  it('shows a toast, the only thing an inline command reports back', () => {
+    const state = new ChatState();
+
+    fireEvent(state, { type: 'toast', message: 'Conversation cleared.', level: 'success' });
+
+    expect(state.toast).toEqual({ message: 'Conversation cleared.', level: 'success' });
+  });
+});
+
+describe('ChatState send queue', () => {
+  it('queues a message typed mid-turn and sends it when the turn completes', () => {
+    const state = new ChatState();
+    state.sendMessage('first');
+    expect(state.busy).toBe(true);
+
+    state.sendMessage('second');
+
+    // Both bubbles are in the transcript immediately — only the wire send
+    // waits — so a follow-up typed mid-turn is never silently dropped.
+    expect(state.blocks.map((b) => (b as { text: string }).text)).toEqual(['first', 'second']);
+    expect(state.queuedCount).toBe(1);
+
+    fireEvent(state, { type: 'complete', iterations: 1 });
+    expect(state.queuedCount).toBe(0);
+    expect(state.busy).toBe(true);
+
+    fireEvent(state, { type: 'complete', iterations: 1 });
+    expect(state.busy).toBe(false);
+  });
+
+  it('releases the composer on send_rejected, which nothing follows', () => {
+    const state = new ChatState();
+    state.sendMessage('hello');
+
+    fireEvent(state, { type: 'send_rejected', message: 'session not found: x' });
+
+    expect(state.busy).toBe(false);
+    expect(state.sendError).toBe('session not found: x');
+  });
+});
+
+describe('ChatState session and task state', () => {
+  it('keeps the checklist from both of its carriers', () => {
+    const state = new ChatState();
+
+    // Live: the standalone broadcast.
+    fireEvent(state, { type: 'todo_update', todos: [{ content: 'write it', status: 'in_progress' }] });
+    expect(state.todos).toEqual([{ content: 'write it', status: 'in_progress' }]);
+
+    // Replay: only the tool_result's ui_payload carries it.
+    fireEvent(state, {
+      type: 'tool_result',
+      tool_id: 't',
+      result: 'ok',
+      ui_payload: { type: 'todo', action: 'update', progress: '1/1', todos: [{ content: 'write it', status: 'completed' }] },
+    });
+    expect(state.todos).toEqual([{ content: 'write it', status: 'completed' }]);
+
+    // An empty list is meaningful: /clear retires the panel with one.
+    fireEvent(state, { type: 'todo_update', todos: [] });
+    expect(state.todos).toEqual([]);
+  });
+
+  it('reads the header fields off session_update', () => {
+    const state = new ChatState();
+
+    fireEvent(state, {
+      type: 'session_update',
+      context_usage: 42,
+      permission_mode: 'interactive',
+      working_dir: '/octo/workspaces/repo',
+    });
+
+    expect(state.session.contextUsage).toBe(42);
+    expect(state.session.permissionMode).toBe('interactive');
+    expect(state.session.workingDir).toBe('/octo/workspaces/repo');
+  });
+
+  it('blanks the previous session’s header fields when the transcript is replaced', () => {
+    const state = new ChatState();
+    fireEvent(state, { type: 'session_update', context_usage: 88 });
+    state.handleHostMessage({ command: 'sessionInfo', sessionId: 's2', name: 'Other session' });
+
+    state.handleHostMessage({ command: 'history', sessionId: 's2', events: [] });
+
+    expect(state.session.contextUsage).toBeNull();
+    // The name rides with the switch rather than being re-announced, so it
+    // must survive the reset.
+    expect(state.session.name).toBe('Other session');
+  });
+});
